@@ -1,6 +1,8 @@
 import { MAP_DEFS, TRAINING_MAP, getMap } from '../../src/sim/maps/maps';
 import { World } from '../../src/sim/world';
 import { NavGrid, analyzeMap } from '../../src/sim/nav';
+import { HALF_W, STAND_H } from '../../src/sim/actor';
+import { CELL } from '../../src/sim/maps/mapgrid';
 
 describe('maps', () => {
   for (const def of MAP_DEFS) {
@@ -34,6 +36,19 @@ describe('maps', () => {
           if (!isFinite(toT[k]) || !isFinite(toCT[k])) traps.push(`${i},${j}`);
         }
         expect(traps, `unreachable cells on ${def.id}`).toEqual([]);
+      });
+
+      it('bots never path into a roof too low to stand under (v1.1.1: Reactor ramp-room trap)', () => {
+        const blocked: string[] = [];
+        for (let j = 0; j < m.h; j++) for (let i = 0; i < m.w; i++) for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          if (!nav.canStep(i, j, i + di, j + dj)) continue;
+          const y = Math.max(nav.height[nav.idx(i, j)], nav.height[nav.idx(i + di, j + dj)]) + 0.01;
+          // standing body just across the cell border, still at the higher floor's height
+          const x = (i + 0.5 + di * 0.5) * CELL + di * (HALF_W + 0.05), z = (j + 0.5 + dj * 0.5) * CELL + dj * (HALF_W + 0.05);
+          const hit = world.overlaps(x, y, z, HALF_W, STAND_H);
+          if (hit?.kind === 'roof') blocked.push(`${i},${j}->${i + di},${j + dj}`);
+        }
+        expect(blocked, `nav edges blocked by a roof on ${def.id}`).toEqual([]);
       });
 
       it('has multiple attack routes and defender hold spots', () => {

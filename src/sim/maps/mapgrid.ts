@@ -15,6 +15,8 @@
 //  ' ' void (outside the map, treated as wall)
 
 export const CELL = 2;
+/** Height of the roof above the floor of a covered ('D') cell, metres. */
+export const ROOF_CLEARANCE = 3.0;
 export const STEP = 0.5; // elevation unit (m)
 
 export type ThemeId =

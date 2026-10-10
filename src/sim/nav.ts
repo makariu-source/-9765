@@ -1,10 +1,12 @@
 // Grid navigation for bots, derived from the same compiled map grid as collisions.
-import { CELL, type CompiledMap, isWalkableType, type SiteId } from './maps/mapgrid';
+import { CELL, type CompiledMap, isWalkableType, ROOF_CLEARANCE, type SiteId } from './maps/mapgrid';
 import type { Vec3 } from './math';
 import type { World } from './world';
 
 export const NAV_STEP_UP = 0.55;
 export const NAV_DROP = 3.6;
+/** Standing body height plus a small margin: a step needs this much headroom. */
+export const NAV_HEADROOM = 1.85;
 
 export interface NavPoint { i: number; j: number }
 
@@ -52,6 +54,8 @@ export class NavGrid {
   readonly w: number; readonly h: number;
   readonly walk: Uint8Array;
   readonly height: Float32Array;
+  /** Roof height over each cell (Infinity when open to the sky). */
+  readonly ceil: Float32Array;
   /** Dynamic extra cost per cell (fires, danger). Reset by owners. */
   readonly extraCost: Float32Array;
   /** Cells adjacent to a non-walkable cell (cover proxies). */
@@ -62,12 +66,14 @@ export class NavGrid {
     const n = this.w * this.h;
     this.walk = new Uint8Array(n);
     this.height = new Float32Array(n);
+    this.ceil = new Float32Array(n);
     this.extraCost = new Float32Array(n);
     this.coverScore = new Uint8Array(n);
     for (let j = 0; j < this.h; j++) for (let i = 0; i < this.w; i++) {
       const k = j * this.w + i;
       this.walk[k] = isWalkableType(map.types[j][i]) ? 1 : 0;
       this.height[k] = map.floorH[j][i];
+      this.ceil[k] = map.types[j][i] === 'D' ? map.floorH[j][i] + ROOF_CLEARANCE : Infinity;
     }
     for (let j = 0; j < this.h; j++) for (let i = 0; i < this.w; i++) {
       if (!this.walk[j * this.w + i]) continue;
@@ -88,6 +94,9 @@ export class NavGrid {
     const ha = this.height[aj * this.w + ai], hb = this.height[bj * this.w + bi];
     const dh = hb - ha;
     if (dh > NAV_STEP_UP || -dh > NAV_DROP) return false;
+    // headroom: a standing body coming off the higher floor must fit under both roofs
+    // (e.g. dropping from a raised room onto a ramp whose low roof blocks the way)
+    if (Math.max(ha, hb) + NAV_HEADROOM > Math.min(this.ceil[aj * this.w + ai], this.ceil[bj * this.w + bi])) return false;
     if (ai !== bi && aj !== bj) {
       // diagonals: both orthogonal neighbours must be passable too
       if (!this.canStep(ai, aj, bi, aj) || !this.canStep(ai, aj, ai, bj)) return false;

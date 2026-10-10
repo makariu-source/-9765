@@ -1,5 +1,5 @@
 // Static collision world built from a compiled map grid.
-import { CELL, type CompiledMap, isWalkableType } from './maps/mapgrid';
+import { CELL, type CompiledMap, isWalkableType, ROOF_CLEARANCE } from './maps/mapgrid';
 import type { Vec3 } from './math';
 
 export type BoxKind =
@@ -106,7 +106,7 @@ export class World {
     });
     // Roofs over covered cells
     merge((i, j) => (type(i, j) === 'D' ? `D|${fh(i, j)}` : null), (x, y, w, h, k) => {
-      const base = parseFloat(k.split('|')[1]) + 3.0;
+      const base = parseFloat(k.split('|')[1]) + ROOF_CLEARANCE;
       this.add({ minx: x * CELL, miny: base, minz: y * CELL, maxx: (x + w) * CELL, maxy: Math.max(top, base + 1), maxz: (y + h) * CELL, kind: 'roof', resist: Infinity, seeThrough: false, cellType: 'D' });
     });
     // Per-cell objects
