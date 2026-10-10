@@ -24,6 +24,7 @@ import { Hud, escapeHtml, type HudModel } from './ui/hud';
 import { Minimap, type RadarMarker } from './ui/minimap';
 import { BuyMenu, Scoreboard } from './ui/panels';
 import { TouchControls } from './ui/touch';
+import { openTouchEditor } from './ui/touchEditor';
 
 export interface SessionOptions {
   setup: MatchSetup;
@@ -193,9 +194,10 @@ export class Session {
   private editTouch(): void {
     if (!this.touch) return;
     this.overlay.classList.add('hidden');
-    this.touch.setEditing(true);
-    const done = h('button', { class: 'btn', style: 'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:60', onclick: () => { this.touch!.setEditing(false); done.remove(); this.overlay.classList.remove('hidden'); } }, 'Готово — перетаскивайте кнопки');
-    this.layer.append(done);
+    openTouchEditor(this.layer, this.settings, () => {
+      this.touch?.layout();
+      this.overlay.classList.remove('hidden');
+    });
   }
 
   private confirmLeave(): void {

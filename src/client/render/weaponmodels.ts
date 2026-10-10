@@ -5,11 +5,11 @@ import * as THREE from 'three';
 import { WEAPONS } from '../../sim/weapons';
 
 const M = {
-  dark: new THREE.MeshStandardMaterial({ color: '#25272a', roughness: 0.45, metalness: 0.7 }),
-  metal: new THREE.MeshStandardMaterial({ color: '#4c5157', roughness: 0.35, metalness: 0.85 }),
-  poly: new THREE.MeshStandardMaterial({ color: '#33352f', roughness: 0.8 }),
+  dark: new THREE.MeshStandardMaterial({ color: '#3d4249', roughness: 0.45, metalness: 0.6 }),
+  metal: new THREE.MeshStandardMaterial({ color: '#7a828b', roughness: 0.32, metalness: 0.8 }),
+  poly: new THREE.MeshStandardMaterial({ color: '#4c5046', roughness: 0.75 }),
   tan: new THREE.MeshStandardMaterial({ color: '#8b7b58', roughness: 0.8 }),
-  wood: new THREE.MeshStandardMaterial({ color: '#7b4823', roughness: 0.65 }),
+  wood: new THREE.MeshStandardMaterial({ color: '#a8622e', roughness: 0.6 }),
   gold: new THREE.MeshStandardMaterial({ color: '#d4af37', roughness: 0.25, metalness: 1 }),
   blade: new THREE.MeshStandardMaterial({ color: '#b9c0c7', roughness: 0.2, metalness: 1 }),
   lens: new THREE.MeshStandardMaterial({ color: '#203a5a', roughness: 0.1, metalness: 0.6, emissive: '#0a1a30' }),
@@ -23,6 +23,15 @@ const M = {
   orange: new THREE.MeshStandardMaterial({ color: '#c8641e', roughness: 0.6 }),
   white: new THREE.MeshStandardMaterial({ color: '#d8d8d0', roughness: 0.6 }),
 };
+
+const paints = new Map<string, THREE.MeshStandardMaterial>();
+/** Cached colored material for weapon finishes. */
+function paint(color: string, rough = 0.55, metal = 0.25): THREE.MeshStandardMaterial {
+  const k = `${color}|${rough}|${metal}`;
+  let m = paints.get(k);
+  if (!m) { m = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal }); paints.set(k, m); }
+  return m;
+}
 
 function box(w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0, name?: string): THREE.Mesh {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -48,6 +57,9 @@ function anchor(name: string, x: number, y: number, z: number): THREE.Object3D {
 interface RifleSpec {
   recv: number; barrel: number; stock: number; mag: number; curve: number; furn: THREE.Material; body: THREE.Material;
   scope?: boolean; handguard?: number; drum?: boolean; bullpup?: boolean; thick?: number;
+  /** colored band on receiver and stock */
+  stripe?: THREE.Material;
+  magMat?: THREE.Material;
 }
 
 function rifle(s: RifleSpec): THREE.Group {
@@ -79,13 +91,18 @@ function rifle(s: RifleSpec): THREE.Group {
   if (s.drum) {
     magGroup.add(cyl(0.07, 0.05, s.body, 0, -0.08, 0, 'y', 16));
   } else {
-    const mg = box(0.03, s.mag, 0.05, M.dark, 0, -s.mag / 2, 0);
+    const mg = box(0.03, s.mag, 0.05, s.magMat ?? M.dark, 0, -s.mag / 2, 0);
     mg.rotation.x = -s.curve;
     magGroup.add(mg);
   }
   magGroup.position.set(0, 0.0, magZ);
   g.add(magGroup);
   g.add(anchor('lefthand', 0, 0.0, front - hg * 0.4));
+  if (s.stripe) {
+    g.add(box(0.054 * t, 0.08 * t, 0.035, s.stripe, 0, 0.035, recvZ - s.recv * 0.35));
+    g.add(box(0.054 * t, 0.064 * t, 0.03, s.stripe, 0, 0.03, front - hg * 0.55));
+    if (!s.bullpup && s.stock > 0) g.add(box(0.05 * t, 0.074, 0.04, s.stripe, 0, 0.0, 0.08 + s.stock * 0.55));
+  }
   // bolt
   g.add(box(0.012, 0.015, 0.04, M.metal, 0.03, 0.05, recvZ - 0.06, 'slide'));
   if (s.scope) {
@@ -104,8 +121,9 @@ function rifle(s: RifleSpec): THREE.Group {
   return g;
 }
 
-function pistol(len: number, h: number, body: THREE.Material, slideMat: THREE.Material, big = false): THREE.Group {
+function pistol(len: number, h: number, body: THREE.Material, slideMat: THREE.Material, big = false, accent?: THREE.Material): THREE.Group {
   const g = new THREE.Group();
+  if (accent) g.add(box(0.032 * (big ? 1.3 : 1), 0.012, len * 0.6, accent, 0, 0.066 * (big ? 1.1 : 1), -len / 2 + 0.03));
   const slide = box(0.03 * (big ? 1.3 : 1), 0.035 * (big ? 1.2 : 1), len, slideMat, 0, 0.045, -len / 2 + 0.03, 'slide');
   g.add(slide);
   g.add(box(0.028, 0.025, len * 0.85, body, 0, 0.017, -len * 0.42 + 0.03));
@@ -207,23 +225,24 @@ export function weaponModel(id: string): THREE.Group {
 function build(id: string): THREE.Group {
   const def = WEAPONS[id];
   switch (id) {
-    case 'ak': return rifle({ recv: 0.42, barrel: 0.42, stock: 0.26, mag: 0.2, curve: 0.35, furn: M.wood, body: M.dark });
-    case 'm4': return rifle({ recv: 0.4, barrel: 0.4, stock: 0.24, mag: 0.17, curve: 0.12, furn: M.poly, body: M.dark, handguard: 0.26 });
-    case 'galeon': return rifle({ recv: 0.42, barrel: 0.4, stock: 0.25, mag: 0.19, curve: 0.25, furn: M.poly, body: M.metal });
-    case 'famine': return rifle({ recv: 0.5, barrel: 0.3, stock: 0, mag: 0.15, curve: 0.08, furn: M.poly, body: M.grey, bullpup: true });
-    case 'awm': return rifle({ recv: 0.5, barrel: 0.58, stock: 0.3, mag: 0.08, curve: 0, furn: M.olive, body: M.dark, scope: true, handguard: 0.3, thick: 1.2 });
-    case 'hawk': return rifle({ recv: 0.42, barrel: 0.52, stock: 0.26, mag: 0.08, curve: 0, furn: M.tan, body: M.dark, scope: true, handguard: 0.24 });
-    case 'hailstorm': return rifle({ recv: 0.5, barrel: 0.48, stock: 0.26, mag: 0.1, curve: 0, furn: M.poly, body: M.dark, drum: true, thick: 1.4 });
-    case 'nova': return rifle({ recv: 0.36, barrel: 0.5, stock: 0.26, mag: 0.0, curve: 0, furn: M.wood, body: M.dark, handguard: 0.22, thick: 1.1 });
-    case 'xmauto': return rifle({ recv: 0.4, barrel: 0.46, stock: 0.26, mag: 0.0, curve: 0, furn: M.poly, body: M.dark, handguard: 0.24, thick: 1.15 });
-    case 'mk5': return rifle({ recv: 0.3, barrel: 0.2, stock: 0.18, mag: 0.16, curve: 0.18, furn: M.poly, body: M.dark, handguard: 0.14 });
-    case 'macx': return rifle({ recv: 0.22, barrel: 0.1, stock: 0.0, mag: 0.18, curve: 0, furn: M.poly, body: M.dark, handguard: 0.06 });
-    case 'px90': return rifle({ recv: 0.42, barrel: 0.12, stock: 0, mag: 0, curve: 0, furn: M.poly, body: M.tan, bullpup: true, thick: 1.3 });
-    case 'g9': return pistol(0.17, 0.11, M.poly, M.dark);
-    case 'warden': return pistol(0.2, 0.11, M.dark, M.dark);
-    case 'p250': return pistol(0.17, 0.11, M.poly, M.metal);
-    case 'deagle': return pistol(0.24, 0.13, M.metal, M.metal, true);
-    case 'trainer': return pistol(0.18, 0.11, M.orange, M.dark);
+    // each weapon gets its own finish so they read clearly in first and third person
+    case 'ak': return rifle({ recv: 0.42, barrel: 0.42, stock: 0.26, mag: 0.2, curve: 0.35, furn: M.wood, body: paint('#5a5f66', 0.4, 0.6), magMat: paint('#c06a2a', 0.5, 0.3), stripe: paint('#e0b040') });
+    case 'm4': return rifle({ recv: 0.4, barrel: 0.4, stock: 0.24, mag: 0.17, curve: 0.12, furn: paint('#c8a874', 0.7, 0.05), body: paint('#6a7078', 0.4, 0.5), handguard: 0.26, stripe: paint('#3a7ad8'), magMat: paint('#4a5058') });
+    case 'galeon': return rifle({ recv: 0.42, barrel: 0.4, stock: 0.25, mag: 0.19, curve: 0.25, furn: paint('#6f7d3c', 0.7, 0.05), body: M.metal, stripe: paint('#d8c050'), magMat: paint('#5a6430') });
+    case 'famine': return rifle({ recv: 0.5, barrel: 0.3, stock: 0, mag: 0.15, curve: 0.08, furn: paint('#4a6a9a', 0.6, 0.1), body: paint('#9aa4b0', 0.4, 0.4), bullpup: true, stripe: paint('#ffffff', 0.5, 0.1) });
+    case 'awm': return rifle({ recv: 0.5, barrel: 0.58, stock: 0.3, mag: 0.08, curve: 0, furn: paint('#5c8a3a', 0.65, 0.05), body: paint('#3f4a3a', 0.5, 0.4), scope: true, handguard: 0.3, thick: 1.2, stripe: paint('#e0d040') });
+    case 'hawk': return rifle({ recv: 0.42, barrel: 0.52, stock: 0.26, mag: 0.08, curve: 0, furn: paint('#5aa6d8', 0.6, 0.1), body: paint('#3c4652', 0.4, 0.5), scope: true, handguard: 0.24, stripe: paint('#f0f4f8') });
+    case 'hailstorm': return rifle({ recv: 0.5, barrel: 0.48, stock: 0.26, mag: 0.1, curve: 0, furn: paint('#7a7a5a', 0.7, 0.1), body: paint('#585c52', 0.5, 0.4), drum: true, thick: 1.4, stripe: paint('#c84a2a'), magMat: paint('#8a8a6a') });
+    case 'nova': return rifle({ recv: 0.36, barrel: 0.5, stock: 0.26, mag: 0.0, curve: 0, furn: M.wood, body: paint('#4a4f56', 0.4, 0.6), handguard: 0.22, thick: 1.1, stripe: paint('#c03030') });
+    case 'xmauto': return rifle({ recv: 0.4, barrel: 0.46, stock: 0.26, mag: 0.0, curve: 0, furn: paint('#3a3a3a', 0.7, 0.1), body: paint('#5a5e64', 0.4, 0.5), handguard: 0.24, thick: 1.15, stripe: paint('#f0c020') });
+    case 'mk5': return rifle({ recv: 0.3, barrel: 0.2, stock: 0.18, mag: 0.16, curve: 0.18, furn: paint('#b89a68', 0.7, 0.05), body: paint('#5c6168', 0.4, 0.5), handguard: 0.14, stripe: paint('#2a8a5a') });
+    case 'macx': return rifle({ recv: 0.22, barrel: 0.1, stock: 0.0, mag: 0.18, curve: 0, furn: paint('#e07a20', 0.6, 0.1), body: paint('#3c3f44', 0.5, 0.4), handguard: 0.06, magMat: paint('#2a2c30') });
+    case 'px90': return rifle({ recv: 0.42, barrel: 0.12, stock: 0, mag: 0, curve: 0, furn: paint('#4f8a4a', 0.65, 0.05), body: paint('#3a5a3a', 0.6, 0.1), bullpup: true, thick: 1.3, stripe: paint('#e8e070') });
+    case 'g9': return pistol(0.17, 0.11, paint('#6a7a46', 0.7, 0.05), paint('#5a5f66', 0.4, 0.6), false, paint('#e0a030'));
+    case 'warden': return pistol(0.2, 0.11, paint('#3a4a6a', 0.6, 0.2), paint('#6f7780', 0.35, 0.7), false, paint('#4ab0ff'));
+    case 'p250': return pistol(0.17, 0.11, paint('#7a4a3a', 0.6, 0.1), paint('#8a9098', 0.35, 0.7));
+    case 'deagle': return pistol(0.24, 0.13, paint('#9aa0a6', 0.3, 0.8), M.gold, true, paint('#c03a2a'));
+    case 'trainer': return pistol(0.18, 0.11, M.orange, M.metal);
     case 'knife': return knife(false);
     case 'goldknife': return knife(true);
     case 'c4': return bomb();

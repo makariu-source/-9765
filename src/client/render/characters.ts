@@ -7,17 +7,19 @@ import { weaponModel } from './weaponmodels';
 
 interface Palette { top: string; pants: string; vest: string; head: 'helmet' | 'cap' | 'balaclava' | 'beanie' | 'bandana'; skin: string; accent: string; gloves: string; boots: string; pack: boolean; goggles: boolean }
 
+// Three-color schemes per variant (top / pants / vest) plus a bright team accent
+// (armbands, patch, helmet stripe) so teams read at a glance.
 const T_PALETTES: Palette[] = [
-  { top: '#5a4a36', pants: '#3e3a30', vest: '#4a4838', head: 'balaclava', skin: '#c49a7a', accent: '#8a2a1e', gloves: '#2a2622', boots: '#2b241c', pack: false, goggles: false },
-  { top: '#6e5c42', pants: '#4a4232', vest: '#3a3a30', head: 'cap', skin: '#b5835e', accent: '#a83a20', gloves: '#3a3026', boots: '#30281e', pack: true, goggles: false },
-  { top: '#4f5534', pants: '#3c4029', vest: '#55583c', head: 'bandana', skin: '#d0a988', accent: '#7a1e1e', gloves: '#262a1c', boots: '#2a2a1e', pack: false, goggles: true },
-  { top: '#2e2e2e', pants: '#2a2a2a', vest: '#3c3a34', head: 'beanie', skin: '#9c7055', accent: '#b04a2a', gloves: '#1e1e1e', boots: '#1c1c1c', pack: true, goggles: false },
+  { top: '#c8813a', pants: '#6b4a2b', vest: '#4f5e33', head: 'balaclava', skin: '#d6a882', accent: '#ff5a2a', gloves: '#3a2c20', boots: '#3a2a1c', pack: false, goggles: false },
+  { top: '#dcb468', pants: '#8a3e2e', vest: '#5f5a38', head: 'cap', skin: '#c48d64', accent: '#ff8a1a', gloves: '#4a3828', boots: '#3c2c1e', pack: true, goggles: false },
+  { top: '#8fa03c', pants: '#5c4832', vest: '#c08c32', head: 'bandana', skin: '#e0b894', accent: '#e8402e', gloves: '#3a3a22', boots: '#34301e', pack: false, goggles: true },
+  { top: '#b24a32', pants: '#45403a', vest: '#cfa468', head: 'beanie', skin: '#ae7c5c', accent: '#ffc030', gloves: '#2a2622', boots: '#2a2420', pack: true, goggles: false },
 ];
 const CT_PALETTES: Palette[] = [
-  { top: '#3b5277', pants: '#2f4060', vest: '#2a3a52', head: 'helmet', skin: '#d1a58a', accent: '#3a7ad8', gloves: '#1a1f28', boots: '#15181e', pack: true, goggles: true },
-  { top: '#4a5a6a', pants: '#3a4654', vest: '#2e3844', head: 'helmet', skin: '#b88a6a', accent: '#4a9aea', gloves: '#22282e', boots: '#1a1e24', pack: false, goggles: false },
-  { top: '#46505c', pants: '#384049', vest: '#525c68', head: 'cap', skin: '#c7977a', accent: '#5aaaf0', gloves: '#1c2026', boots: '#16191d', pack: true, goggles: false },
-  { top: '#5c6450', pants: '#4a5040', vest: '#2a3442', head: 'helmet', skin: '#8f6a52', accent: '#3a8ae0', gloves: '#20241c', boots: '#191c16', pack: false, goggles: true },
+  { top: '#2f6fd6', pants: '#2c4468', vest: '#a2b0c0', head: 'helmet', skin: '#e0b496', accent: '#5fd8ff', gloves: '#1e2632', boots: '#1a1e26', pack: true, goggles: true },
+  { top: '#4aa6ee', pants: '#3c4a5a', vest: '#21428a', head: 'helmet', skin: '#c8987a', accent: '#ffffff', gloves: '#26303a', boots: '#1c2028', pack: false, goggles: false },
+  { top: '#e6edf5', pants: '#2c5cae', vest: '#3e4e60', head: 'cap', skin: '#d8a888', accent: '#38c4ff', gloves: '#202834', boots: '#181c22', pack: true, goggles: false },
+  { top: '#2f9a96', pants: '#2a3e5e', vest: '#cdd5de', head: 'helmet', skin: '#a07a60', accent: '#4a96ff', gloves: '#22282a', boots: '#1a1e1c', pack: false, goggles: true },
 ];
 
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
@@ -79,6 +81,7 @@ export class CharacterView {
   private phase = 0;
   private deathDir = 1;
   private deathSide = 0;
+  private wasAlive = true;
   readonly team: Team;
 
   constructor(team: Team, variant: number) {
@@ -121,6 +124,7 @@ export class CharacterView {
         const h = mesh(new THREE.SphereGeometry(0.135, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), mat(pal.vest, 0.6, 0.2), 0, 0.15, 0);
         this.head.add(h);
         this.head.add(mesh(boxGeo(0.29, 0.025, 0.3), mat(pal.vest, 0.6, 0.2), 0, 0.15, 0));
+        this.head.add(mesh(boxGeo(0.04, 0.03, 0.27), accent, 0, 0.27, 0)); // helmet stripe
         break;
       }
       case 'cap':
@@ -145,6 +149,9 @@ export class CharacterView {
     this.lFore = limb(0.048, 0.28, top); this.lFore.position.y = -0.3;
     this.lFore.add(mesh(new THREE.SphereGeometry(0.05, 8, 6), gloves, 0, -0.3, 0));
     this.lUpper.add(this.lFore);
+    // team armbands
+    this.rUpper.add(mesh(boxGeo(0.125, 0.06, 0.125), accent, 0, -0.07, 0));
+    this.lUpper.add(mesh(boxGeo(0.125, 0.06, 0.125), accent, 0, -0.07, 0));
     this.chest.add(this.rUpper, this.lUpper);
     // legs (hip pivots)
     this.rThigh = limb(0.075, 0.46, pants); this.rThigh.position.set(0.1, -0.05, 0);
@@ -179,6 +186,9 @@ export class CharacterView {
     this.setWeapon(s.alive ? s.weaponId : '');
     if (!s.alive) { this.animateDeath(s); return; }
     this.root.position.y = 0;
+    // undo the death pose: a respawned soldier must stand upright again
+    this.pelvis.rotation.set(0, 0, 0);
+    this.wasAlive = true;
     const cls = s.weaponClass;
     // --- legs
     const sp = s.speed;
@@ -235,7 +245,8 @@ export class CharacterView {
 
   private animateDeath(s: CharacterState): void {
     const t = clamp(s.deathAge / 0.65, 0, 1);
-    if (s.deathAge < 0.02) { this.deathDir = Math.random() < 0.5 ? 1 : -1; this.deathSide = (Math.random() - 0.5) * 0.6; }
+    // choose the fall direction once, at the moment of death (robust to low frame rates)
+    if (this.wasAlive) { this.deathDir = Math.random() < 0.5 ? 1 : -1; this.deathSide = (Math.random() - 0.5) * 0.6; this.wasAlive = false; }
     const fall = t * t; // accelerate like gravity
     // knees buckle first, then the body tips over
     this.pelvis.position.y = lerp(0.95, 0.18, fall);

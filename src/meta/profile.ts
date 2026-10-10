@@ -54,14 +54,14 @@ export interface MatchEntry {
 
 export interface LedgerEntry { time: number; matchId: string; system: 'mmr' | 'visible' | 'elo' | 'wingman'; before: number; after: number; reason: string }
 
-export interface TouchButton { x: number; y: number; size: number }
+export interface TouchButton { x: number; y: number; size: number; hidden?: boolean }
 
 export interface Settings {
   sensitivity: number;
   invertY: boolean;
   fov: number;
   volume: { master: number; sfx: number; music: number; ui: number };
-  graphics: { quality: 'low' | 'medium' | 'high'; shadows: boolean; renderScale: number; particles: number; showFps: boolean };
+  graphics: { quality: 'low' | 'medium' | 'high'; shadows: boolean; renderScale: number; particles: number; showFps: boolean; brightness: number };
   crosshair: { style: 'classic' | 'dot' | 'cross'; color: string; size: number; gap: number; thickness: number; dot: boolean; dynamic: boolean };
   controls: { scheme: 'auto' | 'desktop' | 'touch'; walkToggle: boolean; crouchToggle: boolean; bindings: Record<string, string> };
   touch: { buttons: Record<string, TouchButton>; opacity: number; sensitivity: number; aimAssist: boolean; joystickSize: number };
@@ -87,7 +87,7 @@ export const DEFAULT_TOUCH: Record<string, TouchButton> = {
 export const defaultSettings = (): Settings => ({
   sensitivity: 1.6, invertY: false, fov: 90,
   volume: { master: 0.8, sfx: 0.9, music: 0.5, ui: 0.6 },
-  graphics: { quality: 'medium', shadows: true, renderScale: 1, particles: 1, showFps: false },
+  graphics: { quality: 'medium', shadows: true, renderScale: 1, particles: 1, showFps: false, brightness: 1 },
   crosshair: { style: 'classic', color: '#4dff7a', size: 6, gap: 3, thickness: 2, dot: false, dynamic: true },
   controls: { scheme: 'auto', walkToggle: false, crouchToggle: false, bindings: { ...DEFAULT_BINDINGS } },
   touch: { buttons: JSON.parse(JSON.stringify(DEFAULT_TOUCH)), opacity: 0.55, sensitivity: 1.0, aimAssist: true, joystickSize: 1 },

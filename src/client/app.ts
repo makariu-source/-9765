@@ -61,6 +61,7 @@ export class App {
   applySettings(): void {
     const s = this.profile.settings;
     this.renderer.setQuality(s.graphics.quality, s.graphics.shadows, s.graphics.renderScale);
+    this.renderer.setBrightness(s.graphics.brightness ?? 1);
     this.renderer.baseFov = s.fov;
     sfx.volumes = { ...s.volume };
     sfx.applyVolumes();

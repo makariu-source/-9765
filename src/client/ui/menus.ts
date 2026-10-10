@@ -13,6 +13,10 @@ import { add, clear, fmtTime, h, pct, ratio, svg } from './dom';
 import { escapeHtml } from './hud';
 import { drawMapImage } from './minimap';
 import { CollectionView } from './collection';
+import { openTouchEditor } from './touchEditor';
+
+declare const __APP_VERSION__: string;
+const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
 const MODE_INFO: { id: ModeId; name: string; desc: string; tag?: [string, string] }[] = [
   { id: 'casual', name: 'Обычный матч', desc: 'Закладка бомбы 5×5 без влияния на рейтинг. Быстрый запуск.', tag: ['ИИ', 'ai'] },
@@ -53,7 +57,7 @@ export class MainMenu {
     const comp = p.competitive;
     const rank = comp.calibrationLeft > 0 ? null : rankProgress(comp.visible, ranksFor(p)).rank;
     clear(this.nav).append(
-      h('div', { class: 'logo' }, h('b', {}, 'STRIKE'), 'ZONE', h('small', {}, 'ТАКТИЧЕСКИЙ ШУТЕР')),
+      h('div', { class: 'logo' }, h('b', {}, 'STRIKE'), 'ZONE', h('small', {}, 'ТАКТИЧЕСКИЙ ШУТЕР'), h('small', { style: 'margin-top:2px;letter-spacing:1px' }, `версия ${APP_VERSION}`)),
       item('home', '▶  Играть'),
       item('competitive', '★  Соревновательный'),
       item('proleague', '◆  PRO League', 'pro'),
@@ -571,11 +575,13 @@ export class MainMenu {
         ...range('Размер остальных кнопок', () => s.touch.buttons.jump.size, v => { for (const [k, b] of Object.entries(s.touch.buttons)) if (k !== 'fire') b.size = v; }, 0.5, 1.6, 0.05),
         ...check('Помощь в прицеливании (только вне рейтинга)', () => s.touch.aimAssist, v => (s.touch.aimAssist = v)),
       ),
-      h('p', { class: 'sub' }, 'Расположение кнопок меняется прямо в игре: Пауза → «Настроить сенсорные кнопки».'),
+      h('button', { class: 'btn', style: 'margin:6px 0', onclick: () => openTouchEditor(this.root, s, save) }, 'Редактор сенсорных кнопок'),
+      h('p', { class: 'sub' }, 'Перетаскивайте кнопки, меняйте размер каждой, скрывайте ненужные. Это же можно сделать в игре: Пауза → «Настроить сенсорные кнопки».'),
       h('button', { class: 'btn ghost', onclick: () => { s.touch.buttons = JSON.parse(JSON.stringify(DEFAULT_TOUCH)); save(); } }, 'Сбросить расположение кнопок'),
       h('h2', {}, 'Графика'),
       h('div', { class: 'form' },
         ...select('Качество', () => s.graphics.quality, v => (s.graphics.quality = v), [['low', 'Низкое (телефоны)'], ['medium', 'Среднее'], ['high', 'Высокое']]),
+        ...range('Яркость', () => s.graphics.brightness ?? 1, v => (s.graphics.brightness = v), 0.6, 1.8, 0.05),
         ...check('Тени', () => s.graphics.shadows, v => (s.graphics.shadows = v)),
         ...range('Масштаб рендеринга', () => s.graphics.renderScale, v => (s.graphics.renderScale = v), 0.5, 1, 0.05),
         ...range('Частицы', () => s.graphics.particles, v => (s.graphics.particles = v), 0.25, 1, 0.05),

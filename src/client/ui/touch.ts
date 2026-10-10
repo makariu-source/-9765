@@ -4,7 +4,7 @@ import type { Settings, TouchButton } from '../../meta/profile';
 import type { EdgeAction, HoldAction, Input } from '../input/input';
 import { h } from './dom';
 
-const LABELS: Record<string, string> = {
+export const LABELS: Record<string, string> = {
   fire: 'ОГОНЬ', fireLeft: 'ОГОНЬ', aim: 'ПРИЦЕЛ', jump: 'ПРЫЖОК', crouch: 'ПРИСЕД', reload: 'R', weapon: 'ОРУЖ.',
   grenade: 'ГРАН.', use: 'E', buy: '$', scores: 'TAB', walk: 'ШАГ',
 };
@@ -62,6 +62,7 @@ export class TouchControls {
       el.style.width = el.style.height = `${px}px`;
       el.style.margin = `${-px / 2}px 0 0 ${-px / 2}px`;
       el.style.opacity = String(t.opacity + 0.25);
+      el.style.display = b.hidden ? 'none' : '';
     }
     const s = 140 * t.joystickSize;
     this.stick.style.width = this.stick.style.height = `${s}px`;

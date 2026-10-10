@@ -44,8 +44,8 @@ export class ViewModel {
     this.scene.add(this.camera);
     this.camera.add(this.rig);
     this.rig.add(this.holder);
-    const amb = new THREE.HemisphereLight('#fff8ee', '#5a5048', 1.6);
-    const dir = new THREE.DirectionalLight('#ffffff', 1.6);
+    const amb = new THREE.HemisphereLight('#fff8ee', '#7a7068', 2.4);
+    const dir = new THREE.DirectionalLight('#ffffff', 2.2);
     dir.position.set(0.4, 1, 0.3);
     this.scene.add(amb, dir);
     const sleeve = new THREE.MeshStandardMaterial({ color: '#4a4a3a', roughness: 0.9 });
@@ -73,7 +73,7 @@ export class ViewModel {
   private setTeamColors(team: string): void {
     if (team === this.lastTeam) return;
     this.lastTeam = team;
-    const col = team === 'CT' ? '#2d3d5a' : '#5a4a36';
+    const col = team === 'CT' ? '#2f6fd6' : '#c8813a';
     (this.rArm.material as THREE.MeshStandardMaterial).color.set(col);
     (this.lArm.material as THREE.MeshStandardMaterial).color.set(col);
   }

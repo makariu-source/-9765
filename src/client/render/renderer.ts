@@ -13,6 +13,9 @@ export class Renderer {
   readonly camera: THREE.PerspectiveCamera;
   private sun: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
+  private ambient: THREE.AmbientLight;
+  /** user brightness multiplier (settings) */
+  brightness = 1;
   mapView: MapView | null = null;
   quality: Quality = 'medium';
   shadows = true;
@@ -24,7 +27,7 @@ export class Renderer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 1.5;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
     this.camera = new THREE.PerspectiveCamera(this.hfovToV(90, 16 / 9), 16 / 9, 0.05, 900);
@@ -32,7 +35,8 @@ export class Renderer {
     this.scene.add(this.camera);
     this.hemi = new THREE.HemisphereLight('#cfe0ff', '#7a6a55', 1.1);
     this.sun = new THREE.DirectionalLight('#ffffff', 2.4);
-    this.scene.add(this.hemi, this.sun, this.sun.target);
+    this.ambient = new THREE.AmbientLight('#ffffff', 0.55);
+    this.scene.add(this.hemi, this.sun, this.sun.target, this.ambient);
     this.resize();
   }
 
@@ -43,6 +47,11 @@ export class Renderer {
     const v = 2 * Math.atan(Math.tan(h43 / 2) / (4 / 3));
     void aspect;
     return (v * 180) / Math.PI;
+  }
+
+  setBrightness(b: number): void {
+    this.brightness = b;
+    this.renderer.toneMappingExposure = 1.5 * b;
   }
 
   setQuality(q: Quality, shadows: boolean, renderScale: number): void {
@@ -62,7 +71,7 @@ export class Renderer {
     if (this.mapView) { this.scene.remove(this.mapView.group); this.mapView.dispose(); this.mapView = null; }
     // start from a clean scene: drop anything a previous screen left behind
     for (const o of [...this.scene.children]) {
-      if (o === this.camera || o === this.hemi || o === this.sun || o === this.sun.target) continue;
+      if (o === this.camera || o === this.hemi || o === this.sun || o === this.sun.target || o === this.ambient) continue;
       this.scene.remove(o);
     }
     const theme = world.map.def.theme;
@@ -73,9 +82,10 @@ export class Renderer {
     this.scene.background = new THREE.Color(pal.fog);
     this.hemi.color.set(pal.sky[0]);
     this.hemi.groundColor.set(pal.ambient);
-    this.hemi.intensity = 1.2;
+    this.hemi.intensity = 2.1;
     this.sun.color.set(pal.sun);
-    this.sun.intensity = pal.sunIntensity;
+    this.sun.intensity = pal.sunIntensity * 1.2;
+    this.ambient.intensity = 0.55;
     const cx = world.sizeX / 2, cz = world.sizeZ / 2;
     this.sun.position.set(cx + 40, 70, cz + 25);
     this.sun.target.position.set(cx, 0, cz);
