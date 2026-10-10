@@ -93,6 +93,27 @@ await step('training', async () => {
 await step('arms race', () => playMatch('armsrace', 'villa', 6, '40-armsrace'));
 await step('arms race leave', async () => { await page.evaluate(() => window.__app.session.end(true)); await page.waitForTimeout(800); });
 
+// v1.1.1 regression: soldier models must stand at their simulated height on every map
+// (raised floors like Reactor at 3 m used to hide everyone under the floor)
+for (const mapId of ['sandstorm', 'oasis', 'villa', 'reactor', 'ruins', 'canal', 'skyline', 'depot', 'pharaoh']) {
+  await step(`models on floor: ${mapId}`, async () => {
+    await page.evaluate(m => window.__app.start({ mode: 'competitive', mapId: m }), mapId);
+    await page.waitForSelector('.hud', { timeout: 30000 });
+    await page.waitForTimeout(1000);
+    const worst = await page.evaluate(() => new Promise(done => {
+      const s = window.__app.session; let w = 0, n = 0;
+      const tick = () => {
+        for (const a of s.game.actors) { const cv = s.chars.get(a.id); if (a.alive && cv.root.visible) w = Math.max(w, Math.abs(cv.root.position.y - a.pos.y)); }
+        if (++n < 30) requestAnimationFrame(tick); else done(w);
+      };
+      tick();
+    }));
+    await page.evaluate(() => window.__app.session.end(true));
+    await page.waitForTimeout(500);
+    if (worst > 0.3) throw new Error(`character models are ${worst.toFixed(2)} m off their floor`);
+  });
+}
+
 // mobile viewport with touch controls
 const mobile = await browser.newPage({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
 mobile.on('pageerror', e => errors.push(`mobile pageerror: ${e.message}`));

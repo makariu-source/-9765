@@ -185,8 +185,7 @@ export class CharacterView {
     this.root.rotation.set(0, s.yaw, 0);
     this.setWeapon(s.alive ? s.weaponId : '');
     if (!s.alive) { this.animateDeath(s); return; }
-    this.root.position.y = 0;
-    // undo the death pose: a respawned soldier must stand upright again
+    // undo the death pose (root height belongs to the caller: floors can be raised): a respawned soldier must stand upright again
     this.pelvis.rotation.set(0, 0, 0);
     this.wasAlive = true;
     const cls = s.weaponClass;

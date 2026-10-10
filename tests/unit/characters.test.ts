@@ -20,6 +20,17 @@ describe('character model', () => {
     }
   });
 
+  it('keeps the height it was placed at (raised floors, e.g. Reactor at 3 m)', () => {
+    for (const team of ['T', 'CT'] as const) {
+      const cv = new CharacterView(team, 0);
+      cv.root.position.set(10, 3, 20);
+      for (let i = 0; i < 5; i++) cv.update({ ...base }, 1 / 60);
+      expect(cv.root.position.y).toBe(3);
+      for (let t = 0; t <= 1; t += 0.1) cv.update({ ...base, alive: false, deathAge: t }, 0.1);
+      expect(cv.root.position.y).toBe(3);
+    }
+  });
+
   it('every variant builds for both teams', () => {
     for (let v = 0; v < 4; v++) for (const team of ['T', 'CT'] as const) expect(new CharacterView(team, v).root.children.length).toBeGreaterThan(0);
   });
