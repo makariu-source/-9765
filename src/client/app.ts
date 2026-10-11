@@ -7,13 +7,15 @@ import { TEAM_SIZE } from '../match';
 import type { MatchResult, ModeId } from '../sim/modes/mode';
 import type { Replay } from '../sim/replay';
 import { Rng } from '../sim/rng';
-import { adaptiveTarget, buildLobby, eloToBotLevel, mmrToBotLevel } from '../meta/matchmaking';
+import { adaptiveTarget, botName, buildLobby, eloToBotLevel, mmrToBotLevel } from '../meta/matchmaking';
+import type { LobbyPlayer } from '../sim/modes/lobby';
 import { applyMatchResult, loadProfile, saveProfile, type MatchSummary, type Profile, type KV } from '../meta/profile';
 import type { TrainingSettings } from '../sim/modes/training';
 import type { ArmsRaceConfig } from '../sim/modes/respawn';
 import { sfx } from './audio/sfx';
 import { Renderer } from './render/renderer';
 import { Session, type SessionOptions } from './session';
+import { SpectatorSession } from './spectator';
 import { h } from './ui/dom';
 import { MainMenu } from './ui/menus';
 import { PostMatch } from './ui/postmatch';
@@ -27,6 +29,17 @@ export interface StartOptions {
   training?: TrainingSettings;
 }
 
+/** Bot-only match to watch. */
+export interface SpectateOptions {
+  mode: ModeId;
+  mapId?: string;
+  /** team sizes and difficulty (1..7) of the side that starts as defenders (CT) and attackers (T) */
+  ctCount: number; tCount: number; ctLevel: number; tLevel: number;
+  short?: boolean;
+  /** deathmatch: number of bots and their level */
+  ffaCount?: number; ffaLevel?: number;
+}
+
 function storage(): KV | null {
   try { const t = '__sz_test'; localStorage.setItem(t, '1'); localStorage.removeItem(t); return localStorage; } catch { return null; }
 }
@@ -38,6 +51,8 @@ export class App {
   readonly ui: HTMLElement;
   private menu: MainMenu;
   private session: Session | null = null;
+  private spectator: SpectatorSession | null = null;
+  lastSpectate: SpectateOptions | null = null;
   private menuBgRaf = 0;
   private menuBgActive = false;
   lastReplay: Replay | null = null;
@@ -119,6 +134,49 @@ export class App {
     const v = this.replayViewer;
     this.replayViewer = null;
     v?.close();
+    const s = this.spectator;
+    this.spectator = null;
+    s?.dispose();
+  }
+
+  /** Watch a match played only by bots. */
+  spectate(o: SpectateOptions): void {
+    this.closeReplay();
+    this.stopMenuBackground();
+    const seed = (Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0;
+    const rng = new Rng(seed);
+    const mapId = o.mapId ?? rng.pick(MAP_DEFS).id;
+    const used = new Set<string>();
+    const lobby: LobbyPlayer[] = [];
+    const add = (squad: number, level: number) => {
+      let name = botName(rng);
+      while (used.has(name)) name = botName(rng);
+      used.add(name);
+      lobby.push({ name, squad, isBot: true, level, skill: 1000, model: rng.int(0, 3), style: rng.int(0, 1e6) });
+    };
+    if (o.mode === 'deathmatch') for (let i = 0; i < (o.ffaCount ?? 8); i++) add(i, o.ffaLevel ?? 4);
+    else {
+      for (let i = 0; i < o.ctCount; i++) add(0, o.ctLevel);
+      for (let i = 0; i < o.tCount; i++) add(1, o.tLevel);
+    }
+    const setup: MatchSetup = { mode: o.mode, mapId, seed, lobby, humanStart: 'CT', short: o.mode === 'competitive' ? o.short ?? true : undefined };
+    this.lastSpectate = o;
+    const titles: Partial<Record<ModeId, string>> = { competitive: 'Наблюдение · соревновательный', casual: 'Наблюдение · обычный', wingman: 'Наблюдение · напарники', tdm: 'Наблюдение · командный бой', deathmatch: 'Наблюдение · бой насмерть' };
+    const loading = h('div', { class: 'loading' }, h('div', { class: 'logo' }, h('b', {}, 'STRIKE'), 'ZONE'), h('div', { class: 'sub' }, `Загрузка: ${getMap(mapId).def.name}`), h('div', { class: 'bar' }, h('i', { style: 'width:60%' })));
+    this.ui.replaceChildren(loading);
+    setTimeout(() => {
+      try {
+        const s = new SpectatorSession(this.renderer, this.ui, setup, titles[o.mode] ?? 'Наблюдение');
+        this.spectator = s;
+        s.onExit = () => { this.spectator = null; this.showMenu('spectate'); };
+        s.onAgain = () => { this.spectator = null; this.spectate({ ...o }); };
+        loading.remove();
+        s.start();
+      } catch (err) {
+        console.error(err);
+        this.ui.replaceChildren(h('div', { class: 'menu' }, h('div', { class: 'content' }, h('h1', {}, 'Ошибка запуска'), h('pre', {}, String((err as Error)?.stack ?? err)), h('button', { class: 'btn', onclick: () => this.showMenu() }, 'В меню'))));
+      }
+    }, 60);
   }
 
   start(o: StartOptions): void {

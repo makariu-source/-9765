@@ -11,6 +11,7 @@ import { Rng } from '../sim/rng';
 import { emptyInput, type InputCmd } from '../sim/types';
 import type { GrenadeType } from '../sim/weapons';
 import { profileFor, type BotProfile } from './difficulty';
+import { choosePickup, claimDrop, sightline } from './loadout';
 import { Perception, type Memory } from './perception';
 import type { TeamBrain } from './team';
 import { planThrow, type ThrowPlan } from './throws';
@@ -74,6 +75,12 @@ export class BotController implements Controller {
   private wanderGoal: Vec3 | null = null;
   private postFlashPeekAt = 0;
   private lastSeenEnemyAt = -10;
+  /** weapon-pickup errand the bot has committed to */
+  private pickupTask: { dropId: number; until: number } | null = null;
+  private nextPickupCheck = 0;
+  /** why the last pickup was chosen (stats / spectator overlay) */
+  lastPickupWhy: 'empty' | 'upgrade' | 'situational' | 'ammo' | '' = '';
+  pickupPlans = 0;
   debug = '';
 
   constructor(readonly actor: Actor, level: number, seed: number) {
@@ -223,11 +230,9 @@ export class BotController implements Controller {
       }
     }
 
-    // Weapon pickup when unarmed
-    if (!a.primary && (!freshThreat || vdist(freshThreat.pos, a.pos) > 15)) {
-      const drop = g.drops.find(d => d.weapon.def.slot === 'primary' && vdist(d.pos, a.pos) < 14);
-      if (drop) { this.goal = { kind: 'pickup', pos: drop.pos }; return; }
-    }
+    // Weapon pickups: a better (or better-suited) gun on the floor, when it is safe
+    const pick = this.pickupGoal(g, a, freshThreat);
+    if (pick) { this.goal = pick; return; }
 
     // Defender outnumbered at a site: fall back toward spawn and wait to retake with the team
     if (!isT && g.mode.allowBomb && bomb.state !== 'planted' && this.profile.coordination > 0.45) {
@@ -310,6 +315,42 @@ export class BotController implements Controller {
     }
     // No brain (DM / arms race / TDM): roam between hotspots
     this.goal = this.roam(g, a);
+  }
+
+  private pickupGoal(g: Game, a: Actor, threat: Memory | null): Goal | null {
+    const now = g.time;
+    // keep running for the gun we already chose (no dithering between goals)
+    if (this.pickupTask) {
+      const d = g.drops.find(x => x.id === this.pickupTask!.dropId);
+      if (d && now < this.pickupTask.until && (!threat || vdist(threat.pos, a.pos) > 10)) return { kind: 'pickup', pos: d.pos };
+      this.pickupTask = null;
+    }
+    if (now < this.nextPickupCheck) return null;
+    this.nextPickupCheck = now + 0.4;
+    const m = g.mode as { phaseEnd?: number; liveStart?: number };
+    if (g.mode.allowBomb && m.phaseEnd !== undefined && m.phaseEnd - now < 12 && g.bomb.state !== 'planted') return null;
+    // the killer of whoever dropped a fresh gun may still be watching it
+    const threats = [...this.perception.memory.values()].filter(x => now - x.time < 4).map(x => x.pos);
+    const plan = choosePickup(g, a, this.profile, this.style.awper, threats, this.expectedFightDistance(g, a));
+    if (!plan) return null;
+    const dist = vdist2d(plan.drop.pos, a.pos);
+    if (now - plan.drop.born < 2 && dist > 3) return null;
+    const t = 2.5 + dist / 3;
+    claimDrop(g, plan.drop.id, a.id, t);
+    this.pickupTask = { dropId: plan.drop.id, until: now + t };
+    this.lastPickupWhy = plan.why;
+    this.pickupPlans++;
+    return { kind: 'pickup', pos: plan.drop.pos };
+  }
+
+  /** Distance we expect to fight at: sightlines here and where we are heading/holding. */
+  private expectedFightDistance(g: Game, a: Actor): number {
+    const here = sightline(g, a.pos);
+    const gl = this.goal as { kind: string; pos?: Vec3; look?: Vec3 };
+    if (!gl.pos) return here;
+    const there = sightline(g, gl.pos);
+    if (gl.kind === 'hold' && gl.look) return (Math.min(60, vdist(gl.pos, gl.look)) + there) / 2;
+    return (here + there * 2) / 3;
   }
 
   private roam(g: Game, a: Actor): Goal {
@@ -412,9 +453,12 @@ export class BotController implements Controller {
         break;
       }
       case 'pickup': {
-        const arrived = this.navigate(g, a, goal.pos, cmd, 0.5);
-        look({ x: goal.pos.x, y: goal.pos.y, z: goal.pos.z }, 0.8);
-        if (vdist2d(a.pos, goal.pos) < 1.4) cmd.use = (g.tick % 8) < 2;
+        const near = vdist2d(a.pos, goal.pos) < 1.3;
+        // close enough to grab: stop and look straight at it so "use" connects
+        const arrived = near || this.navigate(g, a, goal.pos, cmd, 0.5);
+        if (near) { cmd.forward = 0; cmd.right = 0; }
+        look({ x: goal.pos.x, y: goal.pos.y, z: goal.pos.z }, near ? 1 : 0.8);
+        if (near) cmd.use = (g.tick % 4) < 2;
         if (arrived && vdist2d(a.pos, goal.pos) < 0.6) this.goal = { kind: 'idle' };
         break;
       }

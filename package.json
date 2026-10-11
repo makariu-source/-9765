@@ -1,7 +1,7 @@
 {
   "name": "strike-zone-web",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "description": "Browser tactical FPS: bots, maps, grenades, bomb defusal, MMR ranks and an independent PRO League ELO ladder.",
   "scripts": {
@@ -15,7 +15,8 @@
     "maps": "tsx scripts/printmaps.ts",
     "sim": "tsx scripts/simmatch.ts",
     "balance": "tsx scripts/balance.ts",
-    "ladder": "tsx scripts/ladder.ts"
+    "ladder": "tsx scripts/ladder.ts",
+    "sweep": "tsx scripts/sweep.ts"
   },
   "dependencies": {
     "three": "0.170.0"

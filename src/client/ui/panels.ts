@@ -106,15 +106,16 @@ export class Scoreboard {
       this.root.replaceChildren(h('h3', {}, h('span', {}, hud.label), h('span', { class: 'sub' }, 'Все соперники — боты (ИИ)')), table(all, false));
       return;
     }
-    const usTeam = human?.team ?? 'CT';
+    // no human (spectating bots): "us" is the first squad, and both teams' money is shown
+    const usTeam = human?.team ?? hud.usTeam;
     const us = g.actors.filter(a => a.team === usTeam).sort((x, y) => y.stats.kills - x.stats.kills);
     const them = g.actors.filter(a => a.team !== usTeam).sort((x, y) => y.stats.kills - x.stats.kills);
     const tname = (t: string) => (t === 'CT' ? 'Защита (CT)' : 'Атака (T)');
     this.root.replaceChildren(
-      h('h3', {}, h('span', { class: usTeam.toLowerCase() }, `${tname(usTeam)} — ${hud.scoreUs}`), h('span', { class: 'sub' }, `${hud.label} · ${g.map.def.name} · матч против ИИ`)),
+      h('h3', {}, h('span', { class: usTeam.toLowerCase() }, `${tname(usTeam)} — ${hud.scoreUs}`), h('span', { class: 'sub' }, `${hud.label} · ${g.map.def.name} · ${human ? 'матч против ИИ' : 'наблюдение за ботами'}`)),
       table(us, g.mode.allowBomb),
       h('h3', {}, h('span', { class: usTeam === 'CT' ? 't' : 'ct' }, `${tname(usTeam === 'CT' ? 'T' : 'CT')} — ${hud.scoreThem}`)),
-      table(them, false),
+      table(them, !human && g.mode.allowBomb),
     );
   }
 }

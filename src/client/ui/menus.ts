@@ -1,5 +1,5 @@
 // Main menu and all non-match screens.
-import type { App, StartOptions } from '../app';
+import type { App, SpectateOptions, StartOptions } from '../app';
 import { MAP_DEFS, getMap } from '../../sim/maps/maps';
 import { ARMS_RACE_DEFAULT, WEAPONS, PISTOLS, RIFLES, SMGS, SNIPERS, HEAVY } from '../../sim/weapons';
 import { DIFFICULTY_NAMES } from '../../ai/difficulty';
@@ -67,6 +67,7 @@ export class MainMenu {
       item('tdm', '⚑  Командный бой'),
       item('training', '◎  Тренировка'),
       item('custom', '⚙  Свой матч'),
+      item('spectate', '👁  Наблюдение за ботами'),
       h('div', { class: 'sep' }),
       item('maps', '▦  Карты'),
       item('collection', '⌖  Коллекция оружия'),
@@ -94,6 +95,7 @@ export class MainMenu {
       case 'tdm': return this.simpleMode(c, 'tdm');
       case 'training': return this.training(c);
       case 'custom': return this.custom(c);
+      case 'spectate': return this.spectateMenu(c);
       case 'maps': return this.maps(c);
       case 'collection': { const v = new CollectionView(); c.append(v.root); return; }
       case 'profile': return this.profileView(c);
@@ -300,6 +302,35 @@ export class MainMenu {
     };
     render();
     add(c, h('h1', {}, 'Пользовательский матч'), h('p', { class: 'sub' }, 'Любой режим, карта, размер команд и сложность ботов.'), body);
+  }
+
+  private spectateMenu(c: HTMLElement): void {
+    const st: SpectateOptions = { mode: 'competitive', mapId: undefined, ctCount: 5, tCount: 5, ctLevel: 4, tLevel: 4, short: true, ffaCount: 8, ffaLevel: 4 };
+    const body = h('div', {});
+    const num = (label: string, key: 'ctCount' | 'tCount' | 'ffaCount', min: number, max: number) => [h('label', {}, label),
+      h('input', { type: 'number', min, max, value: st[key], onchange: (e: Event) => { st[key] = Math.max(min, Math.min(max, +(e.target as HTMLInputElement).value)); } })];
+    const lvl = (label: string, key: 'ctLevel' | 'tLevel' | 'ffaLevel') => [h('label', {}, label),
+      h('select', { onchange: (e: Event) => { st[key] = +(e.target as HTMLSelectElement).value; } }, DIFFICULTY_NAMES.map((n, i) => h('option', { value: i + 1, selected: st[key] === i + 1 }, `${i + 1}. ${n}`)))];
+    const render = () => {
+      const ffa = st.mode === 'deathmatch';
+      clear(body);
+      add(body,
+        h('div', { class: 'form' },
+          h('label', {}, 'Режим'),
+          h('select', { onchange: (e: Event) => { st.mode = (e.target as HTMLSelectElement).value as ModeId; if (st.mode === 'wingman') { st.ctCount = 2; st.tCount = 2; } render(); } },
+            (['competitive', 'casual', 'wingman', 'tdm', 'deathmatch'] as ModeId[]).map(m => h('option', { value: m, selected: st.mode === m }, MODE_INFO.find(x => x.id === m)!.name))),
+          h('label', {}, 'Карта'),
+          h('select', { onchange: (e: Event) => { st.mapId = (e.target as HTMLSelectElement).value || undefined; } }, h('option', { value: '' }, 'Случайная'), MAP_DEFS.map(d => h('option', { value: d.id, selected: st.mapId === d.id }, d.name))),
+          ...(ffa ? [...num('Ботов', 'ffaCount', 2, 12), ...lvl('Сложность', 'ffaLevel')]
+            : [...num('Спецназ: ботов', 'ctCount', 1, 5), ...lvl('Спецназ: сложность', 'ctLevel'), ...num('Атака: ботов', 'tCount', 1, 5), ...lvl('Атака: сложность', 'tLevel')]),
+          ...(st.mode === 'competitive' ? [h('label', {}, 'Короткий формат'), h('input', { type: 'checkbox', checked: st.short, onchange: (e: Event) => { st.short = (e.target as HTMLInputElement).checked; } })] : []),
+        ),
+        h('div', { class: 'note' }, 'Вы только смотрите: в матче играют одни боты. Камеры: авто (следит за самым интересным), за бойцом, глазами бойца, обзор карты. Над бойцами видно, что они делают: обход в тыл, лёркер, роумер, выход вперёд и т. д. После смены сторон команды меняются ролями.'),
+        h('button', { class: 'btn', style: 'margin-top:12px', onclick: () => this.app.spectate({ ...st }) }, 'Смотреть матч'),
+      );
+    };
+    render();
+    add(c, h('h1', {}, 'Наблюдение за ботами'), h('p', { class: 'sub' }, 'Выберите карту, количество и сложность ботов — и смотрите, как они играют.'), body);
   }
 
   private maps(c: HTMLElement): void {

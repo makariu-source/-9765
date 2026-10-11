@@ -114,6 +114,20 @@ for (const mapId of ['sandstorm', 'oasis', 'villa', 'reactor', 'ruins', 'canal',
   });
 }
 
+// v1.2: spectator mode (bot-only match), all cameras
+await step('spectator', async () => {
+  await page.evaluate(() => window.__app.spectate({ mode: 'competitive', mapId: 'reactor', ctCount: 5, tCount: 5, ctLevel: 6, tLevel: 6, short: true }));
+  await page.waitForSelector('.spectator', { timeout: 30000 });
+  await page.waitForTimeout(2500);
+  for (const [key, name] of [['Digit1', '60-spec-auto'], ['Digit2', '61-spec-follow'], ['Digit3', '62-spec-eyes'], ['Digit4', '63-spec-map']]) {
+    await page.keyboard.press(key); await page.waitForTimeout(1200); await shot(name);
+  }
+  const st = await page.evaluate(() => { const g = window.__app.spectator.game; return { t: g.time, human: g.humanId, bots: g.actors.length }; });
+  if (st.human !== -1 || st.bots !== 10 || st.t < 1) throw new Error(`spectator state ${JSON.stringify(st)}`);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.nav', { timeout: 10000 });
+});
+
 // mobile viewport with touch controls
 const mobile = await browser.newPage({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
 mobile.on('pageerror', e => errors.push(`mobile pageerror: ${e.message}`));

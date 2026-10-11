@@ -992,10 +992,11 @@ export class Game {
         if (this.mode.id === 'armsrace') continue;
         const empty = (slot === 'primary' && !a.primary) || (slot === 'secondary' && !a.secondary);
         if ((empty && dist < 1.0) || (usePressed && this.isLookingAt(a, d.pos, 30))) {
+          const from = (slot === 'primary' ? a.primary : slot === 'secondary' ? a.secondary : null)?.def.id;
           if (slot === 'primary') { if (a.primary) this.dropWeapon(a, a.primary); a.primary = d.weapon; this.select(a, 'primary', true); }
           else if (slot === 'secondary') { if (a.secondary) this.dropWeapon(a, a.secondary); a.secondary = d.weapon; if (!a.primary || usePressed) this.select(a, 'secondary', true); }
           this.drops.splice(i, 1);
-          this.emit({ type: 'pickup', actor: a.id, weapon: d.weapon.def.id });
+          this.emit({ type: 'pickup', actor: a.id, weapon: d.weapon.def.id, from });
           break;
         }
       }

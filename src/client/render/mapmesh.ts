@@ -103,11 +103,12 @@ export function buildMapView(world: World, opts: { shadows: boolean; quality: 'l
     push('trim', worldBox(trim, 2, false, false), mat('trim', () => new THREE.MeshStandardMaterial({ color: pal.trim, roughness: 0.8 })), true, false);
   }
 
-  for (const [, bk] of buckets) {
+  for (const [key, bk] of buckets) {
     const geo = mergeGeometries(bk.geos, false);
     for (const g of bk.geos) g.dispose();
     if (!geo) continue;
     const mesh = new THREE.Mesh(geo, bk.mat);
+    mesh.name = key; // e.g. 'roof' (the spectator's overview camera hides roofs)
     mesh.castShadow = bk.cast && opts.shadows;
     mesh.receiveShadow = bk.receive && opts.shadows;
     mesh.matrixAutoUpdate = false;

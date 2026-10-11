@@ -351,7 +351,7 @@ export function analyzeMap(nav: NavGrid, world: World): MapAnalysis {
     const chosen: HoldSpot[] = [];
     for (const c of cand) {
       if (chosen.every(o => nav.cellDistance(o.cell, c.cell) >= 3)) chosen.push(c);
-      if (chosen.length >= 4) break;
+      if (chosen.length >= 7) break; // the best spots first; extra ones give bots variety
     }
     if (!chosen.length && cells.length) {
       const c = cells[0];

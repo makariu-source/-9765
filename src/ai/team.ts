@@ -3,8 +3,8 @@
 // (what teammates saw/heard), never hidden enemy positions.
 import type { Actor } from '../sim/actor';
 import type { Game } from '../sim/game';
-import { siteAt, type SiteId } from '../sim/maps/mapgrid';
-import { vdist, vdist2d, type Vec3 } from '../sim/math';
+import { CELL, siteAt, type SiteId } from '../sim/maps/mapgrid';
+import { clamp, vdist, vdist2d, type Vec3 } from '../sim/math';
 import type { BombMode } from '../sim/modes/bomb';
 import type { LobbyPlayer } from '../sim/modes/lobby';
 import type { HoldSpot, Route } from '../sim/nav';
@@ -13,7 +13,15 @@ import type { GameEvent } from '../sim/types';
 import type { Team } from '../sim/weapons';
 import { BotController, type Goal, type UtilityTask } from './bot';
 
-export type Role = 'entry' | 'support' | 'lurk' | 'awp' | 'anchor' | 'rotator';
+/**
+ * entry/support/awp: the main attack · lurk: waits in the other lane, then sneaks behind
+ * the rotation · flank: goes around through the far side to hit defenders from behind ·
+ * anchor/rotator: site and mid defenders · push: defender who takes early map control
+ * forward, then falls back · roamer: defender moving between info spots.
+ */
+export type Role = 'entry' | 'support' | 'lurk' | 'awp' | 'anchor' | 'rotator' | 'flank' | 'push' | 'roamer';
+
+interface Spot { pos: Vec3; look: Vec3 }
 export type PlanKind = 'rush' | 'execute' | 'split' | 'default' | 'chaos';
 
 interface RoundHistory { side: Team; site: string | null; won: boolean; contact: string | null }
@@ -45,6 +53,19 @@ export class TeamBrain {
   private lastAlertCheck = 0;
   private utilityTasks: { bot: BotController; task: UtilityTask }[] = [];
   private switchedSite = false;
+  // positional variety and special tactics
+  /** last hold cell per bot, kept across rounds so the setup is not the same every round */
+  private lastHold = new Map<number, string>();
+  /** flank / lurk path still to walk */
+  private flankPath = new Map<number, Vec3[]>();
+  /** push: forward spot; roamer: info spots to cycle through */
+  private spots = new Map<number, Spot[]>();
+  private spotIdx = new Map<number, number>();
+  private tacticUntil = new Map<number, number>();
+  private repositionAt = new Map<number, number>();
+  private flankDecided = new Set<number>();
+  /** how often each tactic was used (analysis, spectator overlay) */
+  tactics: Record<string, number> = {};
   rng: Rng;
 
   constructor(readonly squad: number, seed: number) { this.rng = new Rng(seed); }
@@ -79,6 +100,8 @@ export class TeamBrain {
     this.retakeStages.clear();
     this.utilityTasks = [];
     this.switchedSite = false;
+    this.flankPath.clear(); this.spots.clear(); this.spotIdx.clear(); this.tacticUntil.clear();
+    this.repositionAt.clear(); this.flankDecided.clear();
     const m = g.mode as BombMode;
     this.pistolRound = m.round === 1 || m.round === m.regulationHalf + 1;
     this.decideEconomy(g);
@@ -141,11 +164,21 @@ export class TeamBrain {
     const routes = g.analysis.routes.filter(rt => rt.site === this.site);
     const otherRoutes = g.analysis.routes.filter(rt => rt.site !== this.site);
     const bots = this.members.filter(b => b.actor.alive).sort((a, b) => b.style.aggression - a.style.aggression);
-    const coord = this.coordination;
+    // special roles: more likely the better the team plays together (never for novices)
+    const special = this.specialChance();
+    const sneaky = this.planKind !== 'rush' && this.planKind !== 'chaos' && otherRoutes.length > 0 && !g.mode.allowedSites;
+    const spare = bots.slice(1).filter(b => !b.actor.hasBomb);
+    let lurkId = -1, flankId = -1;
+    if (sneaky && bots.length >= 3 && spare.length && this.rng.chance(special * 0.45)) {
+      lurkId = spare.slice().sort((x, y) => y.style.patience - x.style.patience)[0].actor.id;
+    }
+    const spare2 = spare.filter(b => b.actor.id !== lurkId);
+    if (sneaky && bots.length >= 4 && spare2.length && this.rng.chance(special * 0.3)) flankId = this.rng.pick(spare2).actor.id;
     bots.forEach((b, i) => {
       let role: Role = i === 0 ? 'entry' : 'support';
       if (b.style.awper && this.economy === 'full' && ![...this.roles.values()].includes('awp')) role = 'awp';
-      if (i === bots.length - 1 && bots.length >= 4 && coord >= 0.6 && b.style.patience > 0.5) role = 'lurk';
+      if (b.actor.id === lurkId) role = 'lurk';
+      if (b.actor.id === flankId) role = 'flank';
       this.roles.set(b.actor.id, role);
       let route: Route | undefined;
       switch (this.planKind) {
@@ -158,9 +191,16 @@ export class TeamBrain {
         case 'default': route = role === 'lurk' && otherRoutes.length ? this.rng.pick(otherRoutes) : this.rng.pick(g.analysis.routes); break;
         default: route = role === 'lurk' && otherRoutes.length ? this.rng.pick(otherRoutes) : routes[0];
       }
+      // lurkers and flankers start in the other lane
+      if ((role === 'lurk' || role === 'flank') && otherRoutes.length) route = this.rng.pick(otherRoutes);
       if (!route) route = g.analysis.routes[0];
       if (!route) return; // map without bomb routes (e.g. training range)
       this.routes.set(b.actor.id, route);
+      if (role === 'lurk' || role === 'flank') {
+        const path = this.behindPath(g, route.site, this.site);
+        if (path) { this.flankPath.set(b.actor.id, path); this.note(role === 'lurk' ? 't-lurk' : 't-flank'); }
+        else this.roles.set(b.actor.id, 'support');
+      }
       // wait out of sight of the site; 'default' spreads out further back
       const stageIdx = route.cells.findIndex(c => c.i === route.stage.i && c.j === route.stage.j);
       const idx = Math.max(0, (stageIdx >= 0 ? stageIdx : route.cells.length - 8) - (this.planKind === 'default' ? 3 : 0));
@@ -235,9 +275,110 @@ export class TeamBrain {
       }
       this.roles.set(b.actor.id, b.style.awper && this.economy === 'full' ? 'awp' : 'anchor');
       const options = g.analysis.holds.filter(h => h.site === s && !usedHolds.has(h));
-      const spot = options.length ? (this.rng.chance(0.4) ? options[0] : this.rng.pick(options)) : g.analysis.holds.find(h => h.site === s);
+      const spot = this.pickHold(options, b.actor.id) ?? g.analysis.holds.find(h => h.site === s);
       if (spot) { usedHolds.add(spot); this.holds.set(b.actor.id, spot); }
     });
+    this.planDefenseTactics(g, bots);
+  }
+
+  /** Chance of special tactics this round: none for novices, often for top bots. */
+  private specialChance(): number { return clamp((this.coordination - 0.35) * 1.3, 0, 0.8); }
+
+  private note(k: string): void { this.tactics[k] = (this.tactics[k] ?? 0) + 1; }
+
+  /** Weighted-random hold: strong spots preferred, last round's spot avoided. */
+  private pickHold(options: HoldSpot[], id: number): HoldSpot | undefined {
+    if (!options.length) return undefined;
+    const last = this.lastHold.get(id);
+    const ad = this.adaptation;
+    let best: HoldSpot | undefined, bs = -Infinity;
+    for (const h of options) {
+      const k = options.indexOf(h);
+      const key = `${h.cell.i},${h.cell.j}`;
+      const sc = -k * 0.6 + this.rng.next() * (1.5 + ad * 2) - (key === last ? 2 + ad * 2 : 0);
+      if (sc > bs) { bs = sc; best = h; }
+    }
+    if (best) this.lastHold.set(id, `${best.cell.i},${best.cell.j}`);
+    return best;
+  }
+
+  private planDefenseTactics(g: Game, bots: BotController[]): void {
+    const special = this.specialChance();
+    if (!special || g.map.sites.length < 2 || g.mode.allowedSites) return;
+    const m = g.mode as BombMode;
+    const live = g.time + (m.cfg?.freezeTime ?? 0);
+    // one defender takes early map control down an attack lane, then falls back
+    const siteCount = (s: string) => bots.filter(b => this.holds.get(b.actor.id)?.site === s).length;
+    const pushers = bots.filter(b => this.roles.get(b.actor.id) === 'anchor' && siteCount(this.holds.get(b.actor.id)!.site as string) >= 2);
+    if (bots.length >= 3 && pushers.length && this.rng.chance(special * 0.55)) {
+      const b = this.rng.pick(pushers);
+      const site = this.holds.get(b.actor.id)!.site as string;
+      const r = this.rng.pick(g.analysis.routes.filter(x => x.site === site));
+      if (r) {
+        this.roles.set(b.actor.id, 'push');
+        this.spots.set(b.actor.id, [this.laneSpot(g, r, this.rng.range(0.5, 0.65))]);
+        this.tacticUntil.set(b.actor.id, live + this.rng.range(12, 22));
+        this.note('ct-push');
+      }
+    }
+    // the mid player sometimes roams between info spots instead of sitting still
+    const rot = bots.find(b => this.roles.get(b.actor.id) === 'rotator');
+    if (rot && this.rng.chance(special * 0.8)) {
+      const lanes = g.analysis.routes.slice().sort(() => this.rng.next() - 0.5).slice(0, 3);
+      const spots = lanes.map(r => this.laneSpot(g, r, this.rng.range(0.55, 0.72)));
+      const mid = this.holds.get(rot.actor.id);
+      if (mid) spots.unshift({ pos: g.nav.center(mid.cell.i, mid.cell.j), look: mid.look });
+      this.roles.set(rot.actor.id, 'roamer');
+      this.spots.set(rot.actor.id, spots);
+      this.note('ct-roam');
+    }
+    // site defenders change position during the round
+    for (const b of bots) this.repositionAt.set(b.actor.id, live + this.rng.range(14, 34));
+  }
+
+  /** A point part-way down an attack lane (frac 0 = T spawn, 1 = site), looking toward the attackers. */
+  private laneSpot(g: Game, r: Route, frac: number): Spot {
+    const c = r.cells[Math.min(r.cells.length - 1, Math.floor(r.cells.length * frac))];
+    const lc = r.cells[Math.floor(r.cells.length * Math.max(0, frac - 0.3))];
+    const p = g.nav.center(c.i, c.j), l = g.nav.center(lc.i, lc.j);
+    return { pos: p, look: { x: l.x, y: l.y + 1.5, z: l.z } };
+  }
+
+  /** Path from site `from` to site `to` along the defenders' rotation (to hit them from behind). */
+  private behindPath(g: Game, from: string, to: string): Vec3[] | null {
+    const a = g.map.sites.find(s => s.id === from), b = g.map.sites.find(s => s.id === to);
+    if (!a || !b) return null;
+    const path = g.nav.findPath(a.center, b.center);
+    if (!path || path.length < 4) return null;
+    return [{ ...a.center }, ...path.filter((_, k) => k % 6 === 5).map(c => g.nav.center(c.i, c.j)), { ...b.center }];
+  }
+
+  /** Defender flank: reach the attackers' side of a lane into `site` without crossing the site, then push in behind them. */
+  private flankRoute(g: Game, from: Vec3, site: string): Vec3[] | null {
+    const routes = g.analysis.routes.filter(r => r.site === site);
+    const s = g.map.sites.find(x => x.id === site);
+    if (!routes.length || !s) return null;
+    const r = this.rng.pick(routes);
+    const k = Math.floor(r.cells.length * 0.55);
+    const behind = r.cells[k];
+    const nav = g.nav;
+    const penalty = new Float32Array(nav.w * nav.h);
+    const rad = Math.ceil(16 / CELL);
+    const sc = nav.cellOf(s.center);
+    for (let j = sc.j - rad; j <= sc.j + rad; j++) for (let i = sc.i - rad; i <= sc.i + rad; i++) if (nav.isWalk(i, j)) penalty[nav.idx(i, j)] = 40;
+    const path = nav.findPathCells(nav.cellOf(from), behind, penalty);
+    if (!path) return null;
+    const wps = path.filter((_, q) => q % 6 === 5).map(c => nav.center(c.i, c.j));
+    wps.push(nav.center(behind.i, behind.j));
+    for (let q = k + 6; q < r.cells.length; q += 6) wps.push(nav.center(r.cells[q].i, r.cells[q].j));
+    wps.push({ ...s.center });
+    return wps;
+  }
+
+  private nextWaypoint(a: Actor): Vec3 | null {
+    const w = this.flankPath.get(a.id);
+    while (w && w.length && vdist2d(a.pos, w[0]) < 3) w.shift();
+    return w && w.length ? w[0] : null;
   }
 
   private midSpot(g: Game): HoldSpot | null {
@@ -373,19 +514,29 @@ export class TeamBrain {
       const route = this.routes.get(id);
       const stage = this.stages.get(id);
       if (!route || !stage) return null;
-      const site = g.map.sites.find(s => s.id === route.site)!;
+      const role = this.roles.get(id);
+      const site0 = g.map.sites.find(s => s.id === this.site)!;
+      if (role === 'lurk' || role === 'flank') {
+        // flankers leave early to arrive behind the defenders as the team executes;
+        // lurkers wait in the other lane, then sneak along the rotation path
+        const start = role === 'flank' ? this.executeAt - 10 : (this.executing ? (this.goAt.get(id) ?? 0) + 6 : Infinity);
+        const look = g.nav.center(route.entry.i, route.entry.j);
+        if (g.time < start) return { kind: 'hold', pos: stage, look: { x: look.x, y: look.y + 1.5, z: look.z }, reason: role === 'lurk' ? 'lurk' : 'flank-wait' };
+        const wp = this.nextWaypoint(a);
+        // run (audible) along the way, sneak only for the last metres into the site
+        if (wp) return { kind: 'move', pos: wp, walk: this.coordination > 0.6 && vdist2d(a.pos, site0.center) < 10, reason: role };
+        // path done: join the attack on the planned site
+      }
+      const target0 = role === 'lurk' || role === 'flank' ? this.site : route.site;
+      const site = g.map.sites.find(s => s.id === target0)!;
       const go = this.executing && g.time >= (this.goAt.get(id) ?? 0);
       if (!go && this.planKind !== 'rush' && this.planKind !== 'chaos') {
         const look = g.nav.center(route.entry.i, route.entry.j);
         return { kind: 'hold', pos: stage, look: { x: look.x, y: look.y + 1.5, z: look.z }, reason: 'stage' };
       }
-      // lurker waits a bit longer then pushes its own lane
-      if (this.roles.get(id) === 'lurk' && g.time < (this.goAt.get(id) ?? 0) + 6) {
-        return { kind: 'hold', pos: stage, look: g.nav.center(route.entry.i, route.entry.j), reason: 'lurk' };
-      }
       // inside the site: clear toward defender spots
-      if (siteAt(g.map, a.pos.x, a.pos.z) === route.site) {
-        const holds = g.analysis.holds.filter(h => h.site === route.site);
+      if (siteAt(g.map, a.pos.x, a.pos.z) === site.id) {
+        const holds = g.analysis.holds.filter(h => h.site === site.id);
         const h = holds[id % Math.max(1, holds.length)];
         if (h) return { kind: 'move', pos: g.nav.center(h.cell.i, h.cell.j), look: h.look, reason: 'clear' };
       }
@@ -400,6 +551,21 @@ export class TeamBrain {
       const others = this.members.filter(b => b.actor.alive && this.holds.get(b.actor.id)?.site === myHold?.site);
       const stay = anchorElsewhere && this.coordination > 0.7 && others[0]?.actor.id === id && g.bomb.state !== 'planted';
       if (!stay) {
+        // a defender far from the fight sometimes swings around through the attackers' side
+        if (!this.flankDecided.has(id)) {
+          this.flankDecided.add(id);
+          const role = this.roles.get(id);
+          const far = !myHold || myHold.site !== this.alertSite;
+          const p = (role === 'roamer' || role === 'push' || role === 'rotator' ? 0.55 : 0.2) * this.specialChance();
+          if (far && g.bomb.state !== 'planted' && this.rng.chance(p)) {
+            const path = this.flankRoute(g, a.pos, this.alertSite);
+            if (path) { this.flankPath.set(id, path); this.roles.set(id, 'flank'); this.note('ct-flank'); bot.radio(g, a, `Обхожу их сзади на ${this.alertSite}`); }
+          }
+        }
+        if (this.roles.get(id) === 'flank') {
+          const wp = this.nextWaypoint(a);
+          if (wp) return { kind: 'move', pos: wp, walk: this.coordination > 0.6 && vdist2d(a.pos, wp) < 10, reason: 'flank' };
+        }
         const holds = g.analysis.holds.filter(h => h.site === this.alertSite);
         const h = holds[(id + 1) % Math.max(1, holds.length)];
         if (h) return { kind: 'move', pos: g.nav.center(h.cell.i, h.cell.j), look: h.look, walk: this.coordination > 0.6, reason: 'rotate' };
@@ -409,6 +575,38 @@ export class TeamBrain {
       // go check the nearest site
       const near = g.map.sites.slice().sort((x, y) => vdist2d(a.pos, x.center) - vdist2d(a.pos, y.center))[0];
       if (near) return { kind: 'move', pos: { ...near.center }, reason: 'search bomb' };
+    }
+    const role = this.roles.get(id);
+    if (g.bomb.state !== 'planted') {
+      // early forward push, then back to the site
+      if (role === 'push' && g.time < (this.tacticUntil.get(id) ?? 0)) {
+        const sp = this.spots.get(id)?.[0];
+        if (sp) return { kind: 'hold', pos: sp.pos, look: sp.look, reason: 'push' };
+      }
+      // roamer: hop between info spots
+      if (role === 'roamer') {
+        const sps = this.spots.get(id) ?? [];
+        if (sps.length) {
+          let k = this.spotIdx.get(id) ?? 0;
+          const cur = sps[k % sps.length];
+          if (vdist2d(a.pos, cur.pos) < 2.5) {
+            if (!this.tacticUntil.has(id)) this.tacticUntil.set(id, g.time + this.rng.range(5, 10));
+            else if (g.time > this.tacticUntil.get(id)!) { k++; this.spotIdx.set(id, k); this.tacticUntil.delete(id); }
+          }
+          const sp = sps[k % sps.length];
+          return { kind: 'hold', pos: sp.pos, look: sp.look, reason: 'roam' };
+        }
+      }
+      // site defenders swap to another angle now and then (when nothing is happening)
+      if ((role === 'anchor' || role === 'awp') && g.time >= (this.repositionAt.get(id) ?? Infinity) && !bot.perception.nearestMemory(g, 5)) {
+        this.repositionAt.set(id, g.time + this.rng.range(15, 30));
+        const cur = this.holds.get(id);
+        if (cur && this.rng.chance(0.65)) {
+          const taken = new Set([...this.holds.entries()].filter(([o]) => o !== id).map(([, hs]) => hs));
+          const n = this.pickHold(g.analysis.holds.filter(hs => hs.site === cur.site && hs !== cur && !taken.has(hs)), id);
+          if (n) { this.holds.set(id, n); this.note('ct-reposition'); }
+        }
+      }
     }
     const h = this.holds.get(id);
     if (h) return bot.holdFromSpot(g, h);

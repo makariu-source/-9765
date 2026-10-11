@@ -67,6 +67,12 @@ export class Renderer {
     this.resize();
   }
 
+  /** Show or hide roofs (overview camera looks into covered areas). */
+  setRoofsVisible(on: boolean): void {
+    const roof = this.mapView?.group.getObjectByName('roof');
+    if (roof) roof.visible = on;
+  }
+
   loadWorld(world: World): void {
     if (this.mapView) { this.scene.remove(this.mapView.group); this.mapView.dispose(); this.mapView = null; }
     // start from a clean scene: drop anything a previous screen left behind

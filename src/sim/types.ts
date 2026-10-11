@@ -55,7 +55,7 @@ export type GameEvent =
   | { type: 'bomb_exploded'; pos: Vec3 }
   | { type: 'bomb_dropped'; pos: Vec3 }
   | { type: 'bomb_pickup'; actor: number }
-  | { type: 'pickup'; actor: number; weapon: string }
+  | { type: 'pickup'; actor: number; weapon: string; from?: string }
   | { type: 'buy'; actor: number; item: string }
   | { type: 'spawn'; actor: number }
   | { type: 'round_start'; round: number }
