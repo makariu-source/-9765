@@ -29,6 +29,9 @@ export type Goal =
   /** fake: show presence at a spot - run around (footsteps) and fire short bursts */
   | { kind: 'noise'; pos: Vec3; look: Vec3; shots: boolean; reason: string };
 
+/** goal reasons of team scripts (fakes, sneaks, baits) */
+const SCRIPTED = new Set(['fake', 'noise', 'bombfake', 'doublefake', 'fakeback', 'sneak', 'rotbait', 'draw', 'ct-fake-util', 'ct-noise', 'ct-fake-rotate']);
+
 export interface UtilityTask {
   grenade: GrenadeType;
   target: Vec3;
@@ -292,8 +295,10 @@ export class BotController implements Controller {
       }
     }
 
-    // Recently heard/seen enemy: hunt or hold depending on role and style
-    if (freshThreat) {
+    // Recently heard/seen enemy: hunt or hold depending on role and style. A bot running a
+    // scripted fake/sneak does not chase what it hears (it still fights what it sees).
+    const scripted = SCRIPTED.has((this.goal as { reason?: string }).reason ?? '') && !freshThreat?.seen;
+    if (freshThreat && !scripted) {
       const d = vdist(freshThreat.pos, a.pos);
       const holding = this.goal.kind === 'hold';
       const aggressive = !g.mode.allowBomb || (isT ? (!holding || this.style.aggression > 0.6) : this.style.aggression > 0.8 - (1 - this.profile.coordination) * 0.3);
@@ -509,6 +514,7 @@ export class BotController implements Controller {
     switch (goal.kind) {
       case 'idle': break;
       case 'move': {
+        cmd.walk = !!goal.walk; // set first: navigate judges progress by the pace we move at
         const arrived = this.navigate(g, a, goal.pos, cmd);
         cmd.walk = !!goal.walk;
         look(goal.look && vdist(a.pos, goal.pos) < 15 ? goal.look : this.lookAhead(g, a), 0.55);
@@ -861,8 +867,11 @@ export class BotController implements Controller {
     if (!target && this.goal.kind === 'move' && this.path.length > 5 && !this.perception.nearestMemory(g, 8) && def.cls === 'pistol' && this.profile.level >= 4 && g.mode.allowBomb && this.rng.chance(0.01)) {
       cmd.select = 'melee';
     }
-    // jump if stuck
-    if (this.stuckCount > 0 && g.tick % 32 === 0) cmd.jump = true;
+    // jump if stuck - only when really pressed against something (jumping in the open
+    // just kills speed on every landing)
+    if (this.stuckCount > 0 && g.tick % 32 === 0 && g.world.overlaps(a.pos.x, a.pos.y + 0.3, a.pos.z, 0.42, 1.2)) cmd.jump = true;
+    // a sniper walking somewhere lowers the scope (scoped movement is very slow)
+    if (!target && a.scopeLevel > 0 && (this.goal.kind === 'move' || this.goal.kind === 'pickup' || this.goal.kind === 'retreat') && this.path.length > 0 && g.tick % 8 === 0) cmd.fire2 = true;
     // never hold E unless intended
     if (this.goal.kind !== 'defuse' && this.goal.kind !== 'pickup') cmd.use = false;
   }
@@ -881,7 +890,8 @@ export class BotController implements Controller {
       this.path = cells ? g.nav.smooth(cells, a.pos) : [];
       if (this.path.length) this.path[this.path.length - 1] = { ...goal };
       // stuck on a corner: first step back to the middle of our cell, then follow the path
-      if (this.stuckCount > 0 && cells?.length) {
+      // (only when really pressed against geometry, else it can loop forever)
+      if (this.stuckCount > 0 && cells?.length && g.world.overlaps(a.pos.x, a.pos.y + 0.3, a.pos.z, 0.42, 1.2)) {
         const c = g.nav.center(cells[0].i, cells[0].j);
         if (vdist2d(c, a.pos) > 0.3) this.path.unshift(c);
       }
@@ -892,7 +902,8 @@ export class BotController implements Controller {
     }
     // progress / stuck detection
     if (now - this.lastProgressTime > 1.2) {
-      if (vdist2d(a.pos, this.lastProgressPos) < 0.6) {
+      // walking (sneaking) is slow: expect less progress before calling it stuck
+      if (vdist2d(a.pos, this.lastProgressPos) < (cmd.walk ? 0.25 : 0.6)) {
         this.stuckCount++;
         this.pathGoal = null; // repath next tick
         if (this.stuckCount > 3) {
@@ -924,7 +935,7 @@ export class BotController implements Controller {
       const d = Math.hypot(ox, oz);
       if (d > 1.5 || d < 1e-3) continue;
       if ((ox * wx + oz * wz) / d < 0.6) continue; // not in front of us
-      if (o.vel.x * wx + o.vel.z * wz > 2.5) continue; // he is walking away ahead of us: just follow
+      if (o.vel.x * wx + o.vel.z * wz > 1.0) continue; // he is moving on ahead of us (even walking): just follow
       const rx = -wz, rz = wx; // our right-hand side
       const nx = wx * 0.45 + rx * 0.9, nz = wz * 0.45 + rz * 0.9;
       return { x: a.pos.x + nx * 2, y: p.y, z: a.pos.z + nz * 2 };

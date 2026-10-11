@@ -232,8 +232,11 @@ export class TeamBrain {
     const byNade = (list: BotController[]) => list.slice().sort((x, y) => y.actor.grenades.length - x.actor.grenades.length);
     const notCarrier = bots.filter(b => !b.actor.hasBomb && this.roles.get(b.actor.id) !== 'lurk' && this.roles.get(b.actor.id) !== 'flank');
     const set = (b: BotController, list: Order[]) => this.orders.set(b.actor.id, list);
+    // make the show from the lane's waiting spot: out of the defenders' sight, well within earshot
     const noiseAt = (site: string, pick: number, dur: number, nade: boolean, tag: string): Order[] => {
-      const p = this.lanePoint(g, site, 0.92, pick);
+      const rs = g.analysis.routes.filter(r => r.site === site);
+      const r = rs[pick % Math.max(1, rs.length)];
+      const p = r ? { pos: g.nav.center(r.stage.i, r.stage.j), look: this.lanePoint(g, site, 1, pick)!.look } : this.lanePoint(g, site, 0.8, pick);
       return p ? [{ do: 'move', pos: p.pos, tag }, { do: 'noise', pos: p.pos, look: p.look, dur, nade, tag }] : [];
     };
     const realStage = (b: BotController): Vec3 => this.stages.get(b.actor.id) ?? this.lanePoint(g, real, 0.6)!.pos;
