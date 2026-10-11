@@ -26,6 +26,9 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - run: npm run build
+      # Yandex Games archive + store materials, downloadable from the site
+      - run: npm run build:yandex
+      - run: cp dist-yandex.zip dist/strike-zone-yandex.zip && mkdir -p dist/store && cp store/*.png dist/store/
       - run: touch dist/.nojekyll
       - uses: peaceiris/actions-gh-pages@v4
         with:

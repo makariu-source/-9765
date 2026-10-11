@@ -1,7 +1,7 @@
 {
   "name": "strike-zone-web",
   "private": true,
-  "version": "3.0.0",
+  "version": "3.1.0",
   "type": "module",
   "description": "Browser tactical FPS: bots, maps, grenades, bomb defusal, MMR ranks and an independent PRO League ELO ladder.",
   "scripts": {
@@ -12,21 +12,24 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "node tests/e2e/smoke.mjs",
+    "e2e:full": "node tests/e2e/full.mjs",
     "maps": "tsx scripts/printmaps.ts",
     "sim": "tsx scripts/simmatch.ts",
     "balance": "tsx scripts/balance.ts",
     "ladder": "tsx scripts/ladder.ts",
-    "sweep": "tsx scripts/sweep.ts"
+    "sweep": "tsx scripts/sweep.ts",
+    "build:yandex": "tsc --noEmit && node scripts/pack-yandex.mjs"
   },
   "dependencies": {
+    "@fontsource/rajdhani": "^5.1.0",
     "three": "0.170.0"
   },
   "devDependencies": {
     "@types/three": "0.170.0",
     "playwright": "1.56.1",
+    "tsx": "4.19.2",
     "typescript": "5.6.3",
     "vite": "6.0.7",
-    "vitest": "2.1.8",
-    "tsx": "4.19.2"
+    "vitest": "2.1.8"
   }
 }

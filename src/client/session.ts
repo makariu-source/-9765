@@ -54,6 +54,8 @@ export class Session {
   private raf = 0;
   private running = false;
   paused = false;
+  /** paused from outside: tab hidden, ad on screen, platform overlay */
+  externalPause = false;
   private pending: Partial<InputCmd> = {};
   private cmd: InputCmd = emptyInput();
   private spectateId = -1;
@@ -119,13 +121,16 @@ export class Session {
     g.listeners.push(e => { if (e.type === 'round_start') this.onRoundStart(); });
   }
 
+  /** the player is actually playing right now (gameplay markup for the platform) */
+  isPlaying(): boolean { return this.running && !this.ended && !this.paused && !this.externalPause; }
+
   start(): void {
     this.running = true;
     this.lastFrame = performance.now();
     sfx.stopMusic();
     sfx.jingle('start');
     sfx.startAmbient(this.game.map.def.theme);
-    this.hud.message(this.opts.title, this.game.mode.id === 'training' ? `${this.game.map.def.name} · B — магазин оружия, Esc — смена сценария` : `${this.game.map.def.name} · соперники и союзники — боты (ИИ)`, 3.5);
+    this.hud.message(this.opts.title, this.game.mode.id === 'training' ? `${this.game.map.def.name} · B — магазин оружия, Esc — смена сценария` : `${this.game.map.def.name} · соперники и союзники — боты`, 3.5);
     if (!this.touch) this.input.requestLock();
     const loop = (t: number) => {
       if (!this.running) return;
@@ -187,7 +192,7 @@ export class Session {
         h('label', {}, 'Скорость целей, м/с'), h('input', { type: 'number', min: 0.5, max: 7, step: 0.5, value: st.speed, onchange: (e: Event) => { st.speed = +(e.target as HTMLInputElement).value; } }),
         h('label', {}, 'Направление'), h('select', { onchange: (e: Event) => { st.axis = (e.target as HTMLSelectElement).value as 'x' | 'z'; } }, h('option', { value: 'x', selected: st.axis === 'x' }, 'Влево-вправо'), h('option', { value: 'z', selected: st.axis === 'z' }, 'Вперёд-назад')),
       ),
-      h('button', { class: 'btn', style: 'margin-top:10px', onclick: () => { tm.applySettings(st); h0.stats.shotsFired = 0; h0.stats.shotsHit = 0; h0.stats.headshots = 0; h0.stats.kills = 0; this.setPaused(false); if (!this.touch) this.input.requestLock(); } }, 'Применить'),
+      h('button', { class: 'btn', style: 'margin-top:10px', onclick: () => { tm.applySettings(st); this.input.yaw = h0.yaw; this.input.pitch = 0; h0.stats.shotsFired = 0; h0.stats.shotsHit = 0; h0.stats.headshots = 0; h0.stats.kills = 0; this.setPaused(false); if (!this.touch) this.input.requestLock(); } }, 'Применить'),
     );
   }
 
@@ -250,7 +255,7 @@ export class Session {
     this.applyAimAssist(human, dt);
     this.buildCmd(human);
 
-    const simPaused = this.paused && !this.opts.ranked;
+    const simPaused = (this.paused && !this.opts.ranked) || this.externalPause;
     if (!simPaused && !this.ended) {
       this.acc += dt;
       let steps = 0;
@@ -567,7 +572,7 @@ export class Session {
     if (!human.alive) {
       const v = g.actors[this.spectateId];
       const respawn = human.respawnAt > g.time ? ` · возрождение через ${Math.ceil(human.respawnAt - g.time)} с` : '';
-      spectating = v && view !== human ? `Наблюдение: <b>${escapeHtml(v.name)}</b>${v.isBot ? ' <span class="badge-bot">ИИ</span>' : ''} · ЛКМ — следующий${respawn}` : `Вы погибли${respawn}`;
+      spectating = v && view !== human ? `Наблюдение: <b>${escapeHtml(v.name)}</b>${v.isBot ? ' <span class="badge-bot">БОТ</span>' : ''} · ЛКМ — следующий${respawn}` : `Вы погибли${respawn}`;
     }
     const phaseName: Record<string, string> = { freeze: 'Закупка', live: 'Раунд', planted: 'Бомба заложена', post: 'Конец раунда', halftime: 'Смена сторон', over: 'Матч окончен' };
     let roundText = `${hud.label}${hud.roundNumber ? ` · раунд ${hud.roundNumber}/${hud.maxRounds}` : ''} · ${phaseName[hud.phase] ?? ''}`;

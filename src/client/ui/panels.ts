@@ -91,7 +91,7 @@ export class Scoreboard {
     const table = (actors: Actor[], showMoney: boolean) => h('table', { class: 'tbl' },
       h('tr', {}, ['Игрок', 'Сложность', 'У', 'С', 'П', g.mode.allowBomb ? 'ADR' : 'Очки', 'HS%', 'MVP', showMoney ? '$' : ''].map(t => h('th', {}, t))),
       actors.map(a => h('tr', { class: `${a.id === human?.id ? 'me' : ''} ${a.alive ? '' : 'dead'}` },
-        h('td', { html: `${escapeHtml(a.name)}${a.isBot ? '<span class="badge-bot">ИИ</span>' : ''}` }),
+        h('td', { html: `${escapeHtml(a.name)}${a.isBot ? '<span class="badge-bot">БОТ</span>' : ''}` }),
         h('td', {}, a.isBot ? DIFFICULTY_NAMES[Math.round(a.botLevel) - 1] ?? '' : '—'),
         h('td', {}, a.stats.kills), h('td', {}, a.stats.deaths), h('td', {}, a.stats.assists),
         h('td', {}, g.mode.allowBomb ? Math.round(a.stats.damage / rounds) : (g.mode.id === 'armsrace' ? `ур. ${a.armsLevel + 1}` : a.dmScore)),
@@ -103,7 +103,7 @@ export class Scoreboard {
     const hud = g.mode.hud();
     if (g.mode.ffa) {
       const all = g.actors.slice().sort((x, y) => (g.mode.id === 'armsrace' ? y.armsLevel - x.armsLevel : y.dmScore - x.dmScore) || y.stats.kills - x.stats.kills);
-      this.root.replaceChildren(h('h3', {}, h('span', {}, hud.label), h('span', { class: 'sub' }, 'Все соперники — боты (ИИ)')), table(all, false));
+      this.root.replaceChildren(h('h3', {}, h('span', {}, hud.label), h('span', { class: 'sub' }, 'Все соперники — боты')), table(all, false));
       return;
     }
     // no human (spectating bots): "us" is the first squad, and both teams' money is shown
@@ -112,7 +112,7 @@ export class Scoreboard {
     const them = g.actors.filter(a => a.team !== usTeam).sort((x, y) => y.stats.kills - x.stats.kills);
     const tname = (t: string) => (t === 'CT' ? 'Защита (CT)' : 'Атака (T)');
     this.root.replaceChildren(
-      h('h3', {}, h('span', { class: usTeam.toLowerCase() }, `${tname(usTeam)} — ${hud.scoreUs}`), h('span', { class: 'sub' }, `${hud.label} · ${g.map.def.name} · ${human ? 'матч против ИИ' : 'наблюдение за ботами'}`)),
+      h('h3', {}, h('span', { class: usTeam.toLowerCase() }, `${tname(usTeam)} — ${hud.scoreUs}`), h('span', { class: 'sub' }, `${hud.label} · ${g.map.def.name} · ${human ? 'матч против ботов' : 'наблюдение за ботами'}`)),
       table(us, g.mode.allowBomb),
       h('h3', {}, h('span', { class: usTeam === 'CT' ? 't' : 'ct' }, `${tname(usTeam === 'CT' ? 'T' : 'CT')} — ${hud.scoreThem}`)),
       table(them, !human && g.mode.allowBomb),

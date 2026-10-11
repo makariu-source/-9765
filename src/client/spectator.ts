@@ -65,6 +65,8 @@ export class SpectatorSession {
   private autoUntil = 0;
   private speed = 1;
   private paused = false;
+  /** paused from outside: tab hidden, ad on screen, platform overlay */
+  externalPause = false;
   private acc = 0;
   private last = 0;
   private raf = 0;
@@ -238,7 +240,7 @@ export class SpectatorSession {
     const dt = Math.min(0.1, (tms - this.last) / 1000);
     this.last = tms;
     const now = tms / 1000;
-    if (!this.paused && !this.ended) {
+    if (!this.paused && !this.externalPause && !this.ended) {
       this.acc += dt * this.speed;
       let steps = 0;
       while (this.acc >= TICK && steps < 40) {

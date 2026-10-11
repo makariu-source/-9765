@@ -253,3 +253,10 @@ select, input[type=text], input[type=number] { background: var(--panel2); color:
 .spectator .hud .top { flex-wrap: wrap; justify-content: center; }
 .spectator .spec-plan { flex-basis: 100%; text-align: center; font-size: 13px; background: rgba(0,0,0,.45); padding: 2px 10px; border-radius: 6px; white-space: nowrap; }
 @media (max-width: 700px) { .spectator .spec-plan { font-size: 11px; white-space: normal; } }
+
+/* name edit link, age rating mark */
+.link-btn { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; }
+.link-btn:hover { color: var(--text); }
+.modal input[type=text] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 18px; border-radius: 8px; border: 1px solid var(--line); background: rgba(255,255,255,.06); color: var(--text); font-family: var(--font); user-select: text; -webkit-user-select: text; }
+.age-mark { display: inline-block; margin-top: 6px; font-size: 13px; font-weight: 800; padding: 1px 7px; border: 2px solid currentColor; border-radius: 6px; color: #cbd5e1; letter-spacing: 0; }
+input, textarea { user-select: text; -webkit-user-select: text; }

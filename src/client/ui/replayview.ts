@@ -48,7 +48,7 @@ export class ReplayViewer {
     this.info = h('div', { style: 'position:absolute;top:12px;left:12px;background:rgba(0,0,0,.5);padding:8px 12px;border-radius:8px;font-weight:700' });
     this.feed = h('div', { class: 'hud', style: 'pointer-events:none' }, h('div', { class: 'feed' }));
     const sel = h('select', { onchange: (e: Event) => { this.followId = +(e.target as HTMLSelectElement).value; } },
-      r.actors.map(a => h('option', { value: a.id, selected: a.id === this.followId }, `${a.name}${a.isBot ? ' (ИИ)' : ''}`)));
+      r.actors.map(a => h('option', { value: a.id, selected: a.id === this.followId }, `${a.name}${a.isBot ? ' (бот)' : ''}`)));
     const btn = (label: string, f: () => void) => h('button', { class: 'btn ghost', style: 'padding:6px 12px;font-size:15px', onclick: f }, label);
     const playBtn = btn('❚❚', () => { this.playing = !this.playing; playBtn.textContent = this.playing ? '❚❚' : '▶'; });
     this.root = h('div', { style: 'position:absolute;inset:0' }, this.feed, this.info,

@@ -212,3 +212,21 @@ describe('profile & anti-abuse', () => {
     expect(resultChecksum({ ...r, scores: [13, 0] })).not.toBe(c);
   });
 });
+
+describe('v3.1: deathmatch gives XP', () => {
+  it('a normal deathmatch (scores far above 100) is not flagged as an invalid score', async () => {
+    const { createMatch } = await import('../../src/match');
+    const { applyMatchResult, newProfile } = await import('../../src/meta/profile');
+    const lobby = [{ name: 'Human', squad: 0, isBot: false, level: 0, skill: 1000, model: 0 },
+      ...Array.from({ length: 7 }, (_, i) => ({ name: `B${i}`, squad: i + 1, isBot: true, level: 4, skill: 1000, model: 0 }))];
+    const m = createMatch({ mode: 'deathmatch', mapId: 'canal', seed: 3, lobby });
+    const g = m.game;
+    for (let n = 0; !g.mode.over && n < 400000; n++) g.step();
+    const h = g.human()!; h.stats.kills += 3; h.stats.damage += 300; h.stats.shotsFired += 40; h.stats.shotsHit += 12;
+    const r = g.mode.result(false);
+    expect(Math.max(...r.scores)).toBeGreaterThan(100);
+    const s = applyMatchResult(newProfile(), r, { teamAvg: 1000, oppAvg: 1000, fingerprint: 'x' })!;
+    expect(s.flags).not.toContain('invalid-score');
+    expect(s.xpGain).toBeGreaterThan(0);
+  }, 120000);
+});

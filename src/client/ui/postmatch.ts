@@ -10,6 +10,7 @@ import { DIFFICULTY_NAMES } from '../../ai/difficulty';
 import type { SessionOptions } from '../session';
 import { h, svg } from './dom';
 import { escapeHtml } from './hud';
+import { platform } from '../../platform/platform';
 
 export class PostMatch {
   readonly root: HTMLDivElement;
@@ -22,7 +23,7 @@ export class PostMatch {
     const minutes = r.duration / 60;
     const mvp = r.players.find(p => p.id === r.mvpId);
     const rows = (ps: typeof r.players) => ps.map(p => h('tr', { class: p.id === r.humanId ? 'me' : '' },
-      h('td', { html: `${escapeHtml(p.name)}${p.isBot ? `<span class="badge-bot">ИИ · ${DIFFICULTY_NAMES[Math.round(p.botLevel) - 1] ?? ''}</span>` : ''}${p.id === r.mvpId ? ' <span class="mvp-star">★</span>' : ''}` }),
+      h('td', { html: `${escapeHtml(p.name)}${p.isBot ? `<span class="badge-bot">БОТ · ${DIFFICULTY_NAMES[Math.round(p.botLevel) - 1] ?? ''}</span>` : ''}${p.id === r.mvpId ? ' <span class="mvp-star">★</span>' : ''}` }),
       h('td', {}, p.stats.kills), h('td', {}, p.stats.deaths), h('td', {}, p.stats.assists),
       h('td', {}, r.ffa ? (r.mode === 'armsrace' ? `ур. ${(p.armsLevel ?? 0) + 1}` : p.dmScore ?? 0) : Math.round(p.stats.damage / rounds)),
       h('td', {}, p.stats.kills ? `${Math.round((p.stats.headshots / p.stats.kills) * 100)}%` : '0%'),
@@ -72,8 +73,8 @@ export class PostMatch {
 
     this.root = h('div', { class: 'post' },
       h('div', { class: `banner ${cls}` }, banner),
-      h('p', { class: 'sub' }, `${opts.title} · ${getMap(r.mapId).def.name} · ${r.ffa ? '' : `${r.scores[0]} : ${r.scores[1]} · `}${Math.round(minutes)} мин · матч против ИИ`),
-      mvp ? h('p', {}, h('span', { class: 'mvp-star' }, '★ MVP матча: '), mvp.name, mvp.isBot ? h('span', { class: 'badge-bot' }, 'ИИ') : '') : null,
+      h('p', { class: 'sub' }, `${opts.title} · ${getMap(r.mapId).def.name} · ${r.ffa ? '' : `${r.scores[0]} : ${r.scores[1]} · `}${Math.round(minutes)} мин · матч против ботов`),
+      mvp ? h('p', {}, h('span', { class: 'mvp-star' }, '★ MVP матча: '), mvp.name, mvp.isBot ? h('span', { class: 'badge-bot' }, 'БОТ') : '') : null,
       h('div', { class: 'row', style: 'margin:14px 0' },
         h('button', { class: 'btn', onclick: () => app.playAgain() }, 'Играть снова'),
         h('button', { class: 'btn ghost', onclick: () => app.showMenu() }, 'В меню'),
@@ -87,6 +88,17 @@ export class PostMatch {
           [me.stats.mvps, 'MVP'], [s ? s.rating.toFixed(2) : '—', 'рейтинг матча']] as [string | number, string][]).map(([v, l]) => h('div', { class: 'stat' }, h('b', {}, v), h('span', {}, l)))),
       s ? h('div', {}, h('h2', {}, 'Отчёт'), h('ul', { class: 'report' }, s.report.map(i => h('li', { class: i.good ? 'good' : 'bad' }, `${i.good ? '▲' : '▼'} ${i.text}`)))) : null,
       s ? h('p', {}, `+${s.xpGain} XP${s.levelAfter > s.levelBefore ? ` · новый уровень аккаунта: ${s.levelAfter}!` : ''}`) : null,
+      s && s.xpGain > 0 && platform().hasRewarded ? (() => {
+        // optional rewarded ad: +50% of this match's XP, once
+        const bonus = Math.round(s.xpGain * 0.5);
+        const b: HTMLButtonElement = h('button', { class: 'btn ghost', onclick: async () => {
+          b.disabled = true; b.textContent = 'Реклама…';
+          const ok = await platform().rewarded();
+          if (ok) { const r2 = app.addBonusXp(bonus); b.textContent = `+${bonus} XP получено${r2.levelUp ? ' · новый уровень!' : ''}`; }
+          else { b.disabled = false; b.textContent = `+${bonus} XP за просмотр рекламы`; }
+        } }, `+${bonus} XP за просмотр рекламы`);
+        return b;
+      })() : null,
       s?.challengesDone.length ? h('div', { class: 'note' }, `Испытания выполнены: ${s.challengesDone.map(c => c.text).join('; ')}`) : null,
       h('h2', {}, 'Таблица игроков'),
       ...tables,

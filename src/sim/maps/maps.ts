@@ -1,9 +1,9 @@
-// Original maps inspired by the layouts of classic tactical-shooter maps.
+// Original maps for a tactical bomb-defusal shooter.
 // Orientation: row 0 = north. Elevation unit = 0.5 m. CELL = 2 m.
 import { compileMap, type CompiledMap, type MapDef } from './mapgrid';
 
 const sandstorm: MapDef = {
-  id: 'sandstorm', name: 'Sandstorm', inspiredBy: 'Dust II', theme: 'desert', w: 44, h: 42, wallHeight: 7,
+  id: 'sandstorm', name: 'Sandstorm', theme: 'desert', w: 44, h: 42, wallHeight: 7,
   description: 'Пустынный город: длинная простреливаемая улица к A, центр с дверями CT и тоннели к B.',
   paint: p => {
     // T spawn
@@ -54,7 +54,7 @@ const sandstorm: MapDef = {
 };
 
 const oasis: MapDef = {
-  id: 'oasis', name: 'Oasis', inspiredBy: 'Mirage', theme: 'mediterranean', w: 44, h: 40, wallHeight: 7,
+  id: 'oasis', name: 'Oasis', theme: 'mediterranean', w: 44, h: 40, wallHeight: 7,
   description: 'Городской комплекс: дворец над рампой A, широкий центр и квартиры к B.',
   paint: p => {
     // T spawn (east)
@@ -99,7 +99,7 @@ const oasis: MapDef = {
 };
 
 const villa: MapDef = {
-  id: 'villa', name: 'Villa', inspiredBy: 'Inferno', theme: 'italian', w: 44, h: 44, wallHeight: 8,
+  id: 'villa', name: 'Villa', theme: 'italian', w: 44, h: 44, wallHeight: 8,
   description: 'Узкие улицы, «банан» к B, квартиры и арка к A, яма под точкой.',
   paint: p => {
     p.floor(2, 34, 10, 8); p.rect(3, 36, 8, 4, 't'); p.set(11, 41, 'r');
@@ -141,7 +141,7 @@ const villa: MapDef = {
 };
 
 const reactor: MapDef = {
-  id: 'reactor', name: 'Reactor', inspiredBy: 'Nuke', theme: 'industrial', w: 44, h: 40, wallHeight: 9,
+  id: 'reactor', name: 'Reactor', theme: 'industrial', w: 44, h: 40, wallHeight: 9,
   description: 'Промышленный объект: точка A в ангаре, B на нижнем уровне, вентиляция и открытый двор.',
   paint: p => {
     // Base elevation 3 m everywhere walkable; B is underground at 0.
@@ -181,7 +181,7 @@ const reactor: MapDef = {
 };
 
 const ruins: MapDef = {
-  id: 'ruins', name: 'Ruins', inspiredBy: 'Ancient', theme: 'jungle', w: 44, h: 42, wallHeight: 7,
+  id: 'ruins', name: 'Ruins', theme: 'jungle', w: 44, h: 42, wallHeight: 7,
   description: 'Древние руины в джунглях: «пончик» к A, пещера к B и водный центр.',
   paint: p => {
     p.floor(16, 34, 12, 6); p.rect(18, 35, 8, 4, 't'); p.set(16, 34, 'v'); p.set(27, 39, 'v');
@@ -216,7 +216,7 @@ const ruins: MapDef = {
 };
 
 const canal: MapDef = {
-  id: 'canal', name: 'Canal', inspiredBy: 'Overpass', theme: 'urban', w: 46, h: 42, wallHeight: 8,
+  id: 'canal', name: 'Canal', theme: 'urban', w: 46, h: 42, wallHeight: 8,
   description: 'Городская инфраструктура: парк с точкой A, канал и «монстр» к точке B.',
   paint: p => {
     // Street level 2 m, canal at 0
@@ -255,7 +255,7 @@ const canal: MapDef = {
 };
 
 const skyline: MapDef = {
-  id: 'skyline', name: 'Skyline', inspiredBy: 'Vertigo', theme: 'construction', w: 40, h: 40, wallHeight: 4,
+  id: 'skyline', name: 'Skyline', theme: 'construction', w: 40, h: 40, wallHeight: 4,
   description: 'Высотная стройка: рампа на A, лестница на B и лифтовая шахта CT.',
   paint: p => {
     p.floor(14, 32, 12, 6); p.rect(16, 33, 8, 4, 't'); p.set(25, 37, 'x');
@@ -288,7 +288,7 @@ const skyline: MapDef = {
 };
 
 const depot: MapDef = {
-  id: 'depot', name: 'Depot', inspiredBy: 'Train', theme: 'rail', w: 46, h: 40, wallHeight: 8,
+  id: 'depot', name: 'Depot', theme: 'rail', w: 46, h: 40, wallHeight: 8,
   description: 'Железнодорожное депо: вагоны на обеих точках, плющ и нижний проход.',
   paint: p => {
     p.floor(2, 30, 10, 8); p.rect(3, 32, 8, 4, 't');
@@ -325,7 +325,7 @@ const depot: MapDef = {
 };
 
 const pharaoh: MapDef = {
-  id: 'pharaoh', name: 'Pharaoh', inspiredBy: 'Anubis', theme: 'egypt', w: 44, h: 42, wallHeight: 8,
+  id: 'pharaoh', name: 'Pharaoh', theme: 'egypt', w: 44, h: 42, wallHeight: 8,
   description: 'Древнеегипетский город: канал в центре, мост к A и коннектор к B.',
   paint: p => {
     p.floor(16, 34, 12, 6); p.rect(18, 35, 8, 4, 't'); p.set(16, 39, 'p'); p.set(27, 39, 'p');
@@ -357,7 +357,7 @@ const pharaoh: MapDef = {
 };
 
 const range: MapDef = {
-  id: 'range', name: 'Полигон', inspiredBy: 'Training range', theme: 'range', w: 40, h: 34, wallHeight: 6, training: true,
+  id: 'range', name: 'Полигон', theme: 'range', w: 40, h: 34, wallHeight: 6, training: true,
   description: 'Стрельбище: дорожки с мишенями, зона для гранат и стенд отдачи.',
   paint: p => {
     p.floor(2, 2, 36, 30);

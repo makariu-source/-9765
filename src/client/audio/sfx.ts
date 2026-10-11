@@ -29,8 +29,17 @@ export class Sfx {
   volumes = { master: 0.8, sfx: 0.9, music: 0.5, ui: 0.6 };
 
   /** Must be called from a user gesture (browser autoplay policy). */
+  /** all sound stopped from outside (tab hidden, ad on screen) */
+  private held = false;
+  setSuspended(on: boolean): void {
+    this.held = on;
+    if (!this.ctx) return;
+    if (on) void this.ctx.suspend().catch(() => {});
+    else void this.ctx.resume().catch(() => {});
+  }
+
   init(): void {
-    if (this.ctx) { if (this.ctx.state === 'suspended') void this.ctx.resume(); return; }
+    if (this.ctx) { if (this.ctx.state === 'suspended' && !this.held) void this.ctx.resume(); return; }
     const AC = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
     if (!AC) return;
     this.ctx = new AC();
@@ -46,6 +55,7 @@ export class Sfx {
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     this.applyVolumes();
+    if (this.held) void c.suspend().catch(() => {});
   }
 
   applyVolumes(): void {

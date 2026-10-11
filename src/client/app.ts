@@ -9,7 +9,8 @@ import type { Replay } from '../sim/replay';
 import { Rng } from '../sim/rng';
 import { adaptiveTarget, botName, buildLobby, eloToBotLevel, mmrToBotLevel } from '../meta/matchmaking';
 import type { LobbyPlayer } from '../sim/modes/lobby';
-import { applyMatchResult, loadProfile, saveProfile, type MatchSummary, type Profile, type KV } from '../meta/profile';
+import { applyMatchResult, loadProfile, newProfile, saveProfile, STORAGE_KEY, xpForLevel, type MatchSummary, type Profile, type KV } from '../meta/profile';
+import { platform } from '../platform/platform';
 import type { TrainingSettings } from '../sim/modes/training';
 import type { ArmsRaceConfig } from '../sim/modes/respawn';
 import { sfx } from './audio/sfx';
@@ -40,6 +41,9 @@ export interface SpectateOptions {
   ffaCount?: number; ffaLevel?: number;
 }
 
+/** when the local save was last written (to pick the newer of local and cloud copies) */
+export const SAVED_AT_KEY = 'strikezone.savedAt';
+
 function storage(): KV | null {
   try { const t = '__sz_test'; localStorage.setItem(t, '1'); localStorage.removeItem(t); return localStorage; } catch { return null; }
 }
@@ -69,9 +73,56 @@ export class App {
     const unlock = () => { sfx.init(); sfx.applyVolumes(); if (!this.session) sfx.startMusic(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
+    // stop the game and every sound when the player leaves the tab/window, while an ad is on
+    // screen, or when the platform asks for it (Yandex Games requirement 1.3)
+    const hidden = () => this.setExternalPause('hidden', document.visibilityState === 'hidden');
+    document.addEventListener('visibilitychange', hidden);
+    window.addEventListener('blur', () => this.setExternalPause('blur', true));
+    window.addEventListener('focus', () => this.setExternalPause('blur', false));
+    window.addEventListener('pagehide', () => this.save());
+    platform().onAd(on => this.setExternalPause('ad', on));
+    platform().onPause(on => this.setExternalPause('platform', on));
+    // gameplay markup: "playing" only while a match is running and not paused
+    setInterval(() => platform().gameplay(!!this.session?.isPlaying()), 500);
   }
 
-  save(): void { saveProfile(this.profile, this.kv); }
+  private pauseReasons = new Set<string>();
+  setExternalPause(reason: string, on: boolean): void {
+    if (on) this.pauseReasons.add(reason); else this.pauseReasons.delete(reason);
+    const any = this.pauseReasons.size > 0;
+    sfx.setSuspended(any);
+    if (this.session) this.session.externalPause = any;
+    if (this.spectator) this.spectator.externalPause = any;
+  }
+  get externallyPaused(): boolean { return this.pauseReasons.size > 0; }
+
+  save(): void {
+    saveProfile(this.profile, this.kv);
+    if (!this.kv) return;
+    try {
+      const now = Date.now();
+      this.kv.setItem(SAVED_AT_KEY, String(now));
+      const txt = this.kv.getItem(STORAGE_KEY);
+      if (txt) platform().saveCloud({ profile: txt, savedAt: String(now) });
+    } catch { /* storage blocked */ }
+  }
+
+  /** Wipe all progress (local and cloud) and start over. */
+  resetProgress(): void {
+    this.profile = newProfile(this.profile.name);
+    this.save();
+    if (this.kv) platform().saveCloud({ profile: this.kv.getItem(STORAGE_KEY) ?? '', savedAt: String(Date.now()) }, true);
+    this.showMenu('profile');
+  }
+
+  /** Bonus XP for watching a rewarded ad after a match (once per match). */
+  addBonusXp(xp: number): { levelUp: boolean } {
+    const p = this.profile, before = p.level;
+    p.xp += Math.max(0, Math.round(xp));
+    while (p.xp >= xpForLevel(p.level)) { p.xp -= xpForLevel(p.level); p.level++; }
+    this.save();
+    return { levelUp: p.level > before };
+  }
 
   applySettings(): void {
     const s = this.profile.settings;
@@ -168,6 +219,7 @@ export class App {
       try {
         const s = new SpectatorSession(this.renderer, this.ui, setup, titles[o.mode] ?? 'Наблюдение');
         this.spectator = s;
+        s.externalPause = this.externallyPaused;
         s.onExit = () => { this.spectator = null; this.showMenu('spectate'); };
         s.onAgain = () => { this.spectator = null; this.spectate({ ...o }); };
         loading.remove();
@@ -253,6 +305,7 @@ export class App {
       try {
         const s = new Session(this.renderer, this.ui, this.profile.settings, opts);
         this.session = s;
+        s.externalPause = this.externallyPaused;
         s.onEnd = (r, replay) => this.finish(s, r, replay);
         s.onQuit = () => { this.session = null; this.save(); this.showMenu(); };
         loading.style.opacity = '0';
@@ -277,6 +330,9 @@ export class App {
     if (summary?.mmr?.rankUp || (summary?.pro && summary.pro.levelAfter.level > summary.pro.levelBefore.level)) sfx.jingle('rankup');
     else if (summary && summary.levelAfter > summary.levelBefore) sfx.jingle('levelup');
     else sfx.jingle(r.outcome === 1 ? 'win' : 'lose');
+    // full-screen ad at a natural break (the platform decides how often it really shows)
+    platform().gameplay(false);
+    void platform().interstitial();
   }
 
   playAgain(): void { if (this.lastStart) this.start({ ...this.lastStart, mapId: this.lastStart.custom ? this.lastStart.mapId : undefined }); }

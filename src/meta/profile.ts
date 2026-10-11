@@ -98,6 +98,8 @@ export interface Profile {
   version: number;
   id: string;
   name: string;
+  /** the player chose a name (else we ask once on first launch) */
+  nameSet?: boolean;
   createdAt: number;
   xp: number;
   level: number;
@@ -183,7 +185,9 @@ export function integrityFlags(r: MatchResult): string[] {
   if (!r.ffa && r.roundsPlayed >= 8 && me.stats.damage / r.roundsPlayed < 4 && me.stats.shotsFired < r.roundsPlayed) flags.push('no-participation');
   // sanity checks against forged results
   if (me.stats.kills > Math.max(60, r.roundsPlayed * 5) || me.stats.headshots > me.stats.kills || me.stats.shotsHit > me.stats.shotsFired + me.stats.kills) flags.push('invalid-stats');
-  if (r.scores.some(x => x < 0 || x > 100)) flags.push('invalid-score');
+  // round modes end by 13 or so; respawn modes count kills/points and go far higher
+  const maxScore = r.ffa || r.mode === 'tdm' || r.mode === 'armsrace' ? 100000 : 100;
+  if (r.scores.some(x => x < 0 || x > maxScore)) flags.push('invalid-score');
   return flags;
 }
 

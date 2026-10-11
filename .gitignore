@@ -3,3 +3,5 @@ dist
 *.log
 tests/e2e/out
 .DS_Store
+dist-yandex
+dist-yandex.zip

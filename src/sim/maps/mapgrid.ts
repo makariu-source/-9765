@@ -30,7 +30,6 @@ export interface Callout { name: string; x: number; y: number; w: number; h: num
 export interface MapDef {
   id: string;
   name: string;
-  inspiredBy: string;
   description: string;
   theme: ThemeId;
   w: number;

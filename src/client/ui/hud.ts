@@ -42,7 +42,7 @@ export class Hud {
       E('vignette', h('div', { class: 'vignette' })),
       this.labels,
       h('div', { class: 'tl' }, minimap.canvas),
-      vsAI ? h('div', { class: 'vsai' }, 'Матч против ИИ') : null,
+      vsAI ? h('div', { class: 'vsai' }, 'Матч против ботов') : null,
       h('div', { class: 'top' },
         E('aliveUs', h('div', { class: 'alive' })),
         E('scoreUs', h('div', { class: 'score' })),

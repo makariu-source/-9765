@@ -11,6 +11,8 @@ import { DEFAULT_TRAINING, type TrainingSettings } from '../../sim/modes/trainin
 import { sfx } from '../audio/sfx';
 import { add, clear, fmtTime, h, pct, ratio, svg } from './dom';
 import { escapeHtml } from './hud';
+import { NAME_MAX, validateName } from '../../meta/name';
+import { platform } from '../../platform/platform';
 import { drawMapImage } from './minimap';
 import { CollectionView } from './collection';
 import { openTouchEditor } from './touchEditor';
@@ -19,7 +21,7 @@ declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
 
 const MODE_INFO: { id: ModeId; name: string; desc: string; tag?: [string, string] }[] = [
-  { id: 'casual', name: 'Обычный матч', desc: 'Закладка бомбы 5×5 без влияния на рейтинг. Быстрый запуск.', tag: ['ИИ', 'ai'] },
+  { id: 'casual', name: 'Обычный матч', desc: 'Закладка бомбы 5×5 без влияния на рейтинг. Быстрый запуск.', tag: ['боты', 'ai'] },
   { id: 'competitive', name: 'Соревновательный', desc: 'Рейтинговый матч 5×5: экономика, смена сторон, MMR и ранги.', tag: ['Рейтинг', 'ranked'] },
   { id: 'proleague', name: 'PRO League', desc: 'Отдельная лига с ELO, уровнями 1–10 и сезонами.', tag: ['ELO', 'pro'] },
   { id: 'wingman', name: 'Напарники 2×2', desc: 'Короткие раунды на одной точке, отдельный рейтинг.', tag: ['Рейтинг', 'ranked'] },
@@ -47,6 +49,8 @@ export class MainMenu {
     clearInterval(this.queueTimer);
     this.renderNav();
     this.renderSection();
+    // first launch: ask for a name once
+    if (!this.app.profile.nameSet && !this.root.querySelector('.modal-back')) this.askName(true);
   }
 
   private go(s: string): void { sfx.ui_click(); this.show(s); }
@@ -57,7 +61,7 @@ export class MainMenu {
     const comp = p.competitive;
     const rank = comp.calibrationLeft > 0 ? null : rankProgress(comp.visible, ranksFor(p)).rank;
     clear(this.nav).append(
-      h('div', { class: 'logo' }, h('b', {}, 'STRIKE'), 'ZONE', h('small', {}, 'ТАКТИЧЕСКИЙ ШУТЕР'), h('small', { style: 'margin-top:2px;letter-spacing:1px' }, `версия ${APP_VERSION}`)),
+      h('div', { class: 'logo' }, h('b', {}, 'STRIKE'), 'ZONE', h('small', {}, 'ТАКТИЧЕСКИЙ ШУТЕР'), h('small', { style: 'margin-top:2px;letter-spacing:1px' }, `версия ${APP_VERSION}`), h('span', { class: 'age-mark', title: 'Возрастное ограничение' }, '16+')),
       item('home', '▶  Играть'),
       item('competitive', '★  Соревновательный'),
       item('proleague', '◆  PRO League', 'pro'),
@@ -68,6 +72,7 @@ export class MainMenu {
       item('training', '◎  Тренировка'),
       item('custom', '⚙  Свой матч'),
       item('spectate', '👁  Наблюдение за ботами'),
+      item('help', '?  Как играть'),
       h('div', { class: 'sep' }),
       item('maps', '▦  Карты'),
       item('collection', '⌖  Коллекция оружия'),
@@ -78,7 +83,7 @@ export class MainMenu {
       item('settings', '⚒  Настройки'),
       h('div', { class: 'profile-chip' },
         rank ? svg(rankEmblemSvg(rank, 34)) : h('span', { class: 'pill' }, `${comp.calibrationLeft}`),
-        h('div', {}, h('b', {}, p.name), h('div', { style: 'color:var(--muted)' }, `Уровень ${p.level} · ${rank ? rank.name : 'калибровка'}`)),
+        h('div', {}, h('b', {}, p.name, ' ', h('button', { class: 'link-btn', title: 'Изменить имя', onclick: () => this.askName(false) }, '✎')), h('div', { style: 'color:var(--muted)' }, `Уровень ${p.level} · ${rank ? rank.name : 'калибровка'}`)),
       ),
     );
   }
@@ -96,6 +101,7 @@ export class MainMenu {
       case 'training': return this.training(c);
       case 'custom': return this.custom(c);
       case 'spectate': return this.spectateMenu(c);
+      case 'help': return this.help(c);
       case 'maps': return this.maps(c);
       case 'collection': { const v = new CollectionView(); c.append(v.root); return; }
       case 'profile': return this.profileView(c);
@@ -118,7 +124,7 @@ export class MainMenu {
   private home(c: HTMLElement): void {
     add(c, 
       h('h1', {}, 'Играть'),
-      h('p', { class: 'sub' }, 'Все союзники и соперники — боты с честными правилами: одинаковая баллистика, обзор и экономика. Матчи против ИИ отмечаются отдельно.'),
+      h('p', { class: 'sub' }, 'Все союзники и соперники — боты с честными правилами: одинаковая баллистика, обзор и экономика. Матчи против ботов отмечаются отдельно.'),
       h('div', { class: 'row', style: 'margin-bottom:18px' },
         h('button', { class: 'btn', onclick: () => this.start({ mode: 'casual' }) }, 'Быстрая игра'),
         h('button', { class: 'btn ghost', onclick: () => this.go('competitive') }, 'Соревновательный'),
@@ -164,7 +170,7 @@ export class MainMenu {
     for (const d of MAP_DEFS) {
       const cv = drawMapImage(getMap(d.id), 4);
       const card = h('div', { class: 'card click map-card', onclick: () => { selected = d.id; for (const [id, el] of cards) el.classList.toggle('sel', id === d.id); sfx.ui_click(); } },
-        cv, h('div', { class: 'meta' }, h('b', {}, d.name), h('br', {}), h('small', {}, `по мотивам ${d.inspiredBy} · ${d.description}`)));
+        cv, h('div', { class: 'meta' }, h('b', {}, d.name), h('br', {}), h('small', {}, d.description)));
       cards.set(d.id, card);
       grid.append(card);
     }
@@ -333,10 +339,60 @@ export class MainMenu {
     add(c, h('h1', {}, 'Наблюдение за ботами'), h('p', { class: 'sub' }, 'Выберите карту, количество и сложность ботов — и смотрите, как они играют.'), body);
   }
 
+  private help(c: HTMLElement): void {
+    const li = (t: string) => h('li', {}, t);
+    add(c, h('h1', {}, 'Как играть'),
+      h('p', { class: 'sub' }, 'Командный тактический шутер против ботов. Атака закладывает бомбу на точку A или B, защита не даёт это сделать или обезвреживает бомбу. Раунд выигрывает команда, выполнившая свою задачу или устранившая соперников.'),
+      h('h2', {}, 'Управление на компьютере'),
+      h('ul', {}, ['W A S D — движение, Пробел — прыжок, Ctrl — присесть, Shift — тихий шаг', 'Мышь — обзор, ЛКМ — выстрел, ПКМ — прицел снайперской винтовки / сильный удар ножом', 'R — перезарядка, 1–5 и колесо мыши — выбор оружия, G — граната, Q — выбросить оружие',
+        'E — подобрать оружие, разминировать бомбу', 'B — магазин оружия (в начале раунда), Tab — таблица счёта, Esc — пауза и настройки', 'Клавиши можно переназначить: Настройки → Управление'].map(li)),
+      h('h2', {}, 'Управление на телефоне'),
+      h('ul', {}, ['Левая половина экрана — джойстик движения, правая — обзор', 'Кнопки огня, прицела, прыжка, приседа, перезарядки, гранат и магазина — на экране',
+        'Расположение и размер кнопок: Настройки → «Редактор сенсорных кнопок» или Пауза в матче'].map(li)),
+      h('h2', {}, 'Режимы'),
+      h('ul', {}, ['Соревновательный и PRO League — рейтинговые матчи с рангами и ELO', 'Обычный и Напарники (2×2) — без рейтинга', 'Бой насмерть, Командный бой, Гонка вооружений — бой с возрождением',
+        'Тренировка — стрельбище, движущиеся цели, тест реакции, отдача и гранаты', 'Свой матч — любой режим, карта и сложность; Наблюдение — смотреть, как играют боты'].map(li)),
+      h('p', { class: 'note' }, 'Все соперники и союзники — компьютерные боты. Чувствительность, графика и звук — в разделе «Настройки».'));
+  }
+
+  /** Ask for the player's name (first launch, or from the home screen). */
+  askName(first: boolean): void {
+    const p = this.app.profile;
+    const input: HTMLInputElement = h('input', { type: 'text', value: first ? '' : p.name, maxlength: NAME_MAX, placeholder: 'Ваше имя' });
+    const err = h('p', { class: 'sub', style: 'color:#ff8a7a;min-height:1.2em' });
+    const close = () => { m.remove(); this.show(this.section); };
+    const save = () => {
+      const v = validateName(input.value);
+      if (!v.ok) { err.textContent = v.error; return; }
+      p.name = v.name; p.nameSet = true; this.app.save(); close();
+    };
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') save(); e.stopPropagation(); });
+    const m = h('div', { class: 'modal-back' }, h('div', { class: 'modal' },
+      h('h2', {}, first ? 'Как вас называть?' : 'Изменить имя'),
+      h('p', { class: 'sub' }, `Имя видно в таблицах и на экране матча. ${NAME_MAX} символов максимум, только буквы, цифры, пробел, _ и -.`),
+      input, err,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onclick: save }, 'Сохранить'),
+        h('button', { class: 'btn ghost', onclick: () => { if (first) { p.nameSet = true; this.app.save(); } close(); } }, first ? 'Пропустить' : 'Отмена'))));
+    this.root.append(m);
+    setTimeout(() => input.focus(), 50);
+  }
+
+  /** In-game confirmation (native confirm() dialogs can be blocked inside the platform iframe). */
+  private confirmReset(): void {
+    const m = h('div', { class: 'modal-back' }, h('div', { class: 'modal' },
+      h('h2', {}, 'Сбросить весь прогресс?'),
+      h('p', { class: 'sub' }, 'Ранги, PRO League, статистика, история и настройки будут удалены. Это нельзя отменить.'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn danger', onclick: () => { m.remove(); this.app.resetProgress(); } }, 'Сбросить'),
+        h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Отмена'))));
+    this.root.append(m);
+  }
+
   private maps(c: HTMLElement): void {
-    add(c, h('h1', {}, 'Карты'), h('p', { class: 'sub' }, 'Оригинальные карты по мотивам классических тактических шутеров.'),
+    add(c, h('h1', {}, 'Карты'), h('p', { class: 'sub' }, 'Оригинальные карты для режима закладки бомбы.'),
       h('div', { class: 'grid' }, MAP_DEFS.map(d => h('div', { class: 'card map-card' }, drawMapImage(getMap(d.id), 4),
-        h('div', { class: 'meta' }, h('b', {}, d.name), h('br', {}), h('small', {}, `по мотивам ${d.inspiredBy}`), h('p', {}, d.description),
+        h('div', { class: 'meta' }, h('b', {}, d.name), h('p', {}, d.description),
           h('div', { class: 'row', style: 'margin-top:8px' },
             h('button', { class: 'btn ghost', onclick: () => this.start({ mode: 'casual', mapId: d.id }) }, 'Обычный'),
             h('button', { class: 'btn ghost', onclick: () => this.start({ mode: 'deathmatch', mapId: d.id }) }, 'DM')))))));
@@ -367,15 +423,15 @@ export class MainMenu {
               h('div', { class: 'bar', style: 'margin:8px 0' }, h('i', { style: `width:${prog.frac * 100}%;background:${prog.level.color}` })),
               h('p', {}, `Сезон ${st.season} · осталось ${daysLeft} дн. · матчей ${st.matches} · побед ${st.wins} · пик ${st.peakElo} ELO`))),
           ban > 0 ? h('div', { class: 'warn' }, `Запрет поиска за выход из матча: ${fmtTime(ban / 1000)}`) : null,
-          h('div', { class: 'note' }, 'Уровни 1–3: базовые боты · 4–6: опытные · 7–8: элитные · 9–10: максимально продвинутые тактические боты. Сила ботов растёт только за счёт качества решений и командной игры — без бонусов к урону, здоровью или «зрения сквозь стены». Все соперники в PRO League — ИИ.'),
+          h('div', { class: 'note' }, 'Уровни 1–3: базовые боты · 4–6: опытные · 7–8: элитные · 9–10: максимально продвинутые тактические боты. Сила ботов растёт только за счёт качества решений и командной игры — без бонусов к урону, здоровью или «зрения сквозь стены». Все соперники в PRO League — боты.'),
           h('button', { class: 'btn pro', style: 'margin-top:10px', disabled: ban > 0, onclick: () => this.proQueue() }, 'Найти матч PRO League'),
         );
       } else if (tab === 'leaderboard') {
         const rows = leaderboard(st, p.name);
-        add(body, h('p', { class: 'sub' }, `Сезон ${st.season}. Участники с меткой «ИИ» — боты лиги; их рейтинг меняется между вашими матчами.`),
+        add(body, h('p', { class: 'sub' }, `Сезон ${st.season}. Участники с меткой «БОТ» — боты лиги; их рейтинг меняется между вашими матчами.`),
           h('table', { class: 'tbl' }, h('tr', {}, ['#', 'Участник', 'Level', 'ELO', 'Матчи', 'Винрейт'].map(t => h('th', {}, t))),
             rows.slice(0, 60).map((r, i) => h('tr', { class: r.isYou ? 'me' : '', style: 'cursor:pointer', onclick: () => r.isAI && this.proProfile(r.id) },
-              h('td', {}, i + 1), h('td', { html: `${escapeHtml(r.name)}${r.isAI ? '<span class="badge-bot">ИИ</span>' : ' (вы)'}` }), h('td', {}, r.level), h('td', {}, r.elo), h('td', {}, r.matches), h('td', {}, pct(r.winrate, 1))))));
+              h('td', {}, i + 1), h('td', { html: `${escapeHtml(r.name)}${r.isAI ? '<span class="badge-bot">БОТ</span>' : ' (вы)'}` }), h('td', {}, r.level), h('td', {}, r.elo), h('td', {}, r.matches), h('td', {}, pct(r.winrate, 1))))));
         if (st.calibrationLeft > 0) body.append(h('p', { class: 'sub' }, 'Вы появитесь в таблице после калибровки.'));
       } else if (tab === 'history') {
         add(body, st.history.length ? h('table', { class: 'tbl' }, h('tr', {}, ['Дата', 'Карта', 'Счёт', 'K/D', 'Рейтинг', 'ELO'].map(t => h('th', {}, t))),
@@ -389,7 +445,7 @@ export class MainMenu {
           h('li', {}, 'Подбор строже: соперники в пределах ±50 ELO, окно поиска расширяется медленно.'),
           h('li', {}, `Выход из матча: поражение, дополнительный штраф 50 ELO и растущий запрет поиска (15/30/60… мин).`),
           h('li', {}, 'Сезон длится 8 недель. Пик сезона и статистика сохраняются отдельно.'),
-          h('li', {}, 'Статистика PRO League ведётся отдельно и помечается как «против ИИ».'),
+          h('li', {}, 'Статистика PRO League ведётся отдельно и помечается как «против ботов».'),
         )));
       }
     };
@@ -402,7 +458,7 @@ export class MainMenu {
     if (!pp) return;
     const l = proLevelProgress(pp.elo, this.app.profile.pro.levels).level;
     const back = h('div', { class: 'modal-back', onclick: (e: Event) => { if (e.target === back) back.remove(); } }, h('div', { class: 'modal' },
-      h('div', { class: 'row' }, svg(proLevelBadgeSvg(l, 60)), h('div', {}, h('h2', { style: 'margin:0' }, pp.name, h('span', { class: 'badge-bot' }, 'ИИ-участник')), h('p', { class: 'sub', style: 'margin:0' }, `Level ${l.level} · ${pp.elo} ELO`))),
+      h('div', { class: 'row' }, svg(proLevelBadgeSvg(l, 60)), h('div', {}, h('h2', { style: 'margin:0' }, pp.name, h('span', { class: 'badge-bot' }, 'бот лиги')), h('p', { class: 'sub', style: 'margin:0' }, `Level ${l.level} · ${pp.elo} ELO`))),
       h('div', { class: 'grid', style: 'margin-top:14px' },
         h('div', { class: 'stat' }, h('b', {}, pp.matches), h('span', {}, 'матчей')),
         h('div', { class: 'stat' }, h('b', {}, pct(pp.wins, pp.matches)), h('span', {}, 'побед')),
@@ -427,14 +483,14 @@ export class MainMenu {
     const tick = () => {
       const sec = (Date.now() - t0) / 1000;
       const w = searchWindow(sec);
-      status.textContent = `${fmtTime(sec)} · подбор соперников в диапазоне ${elo - w}–${elo + w} ELO · состав заполняется ботами (ИИ)`;
+      status.textContent = `${fmtTime(sec)} · подбор соперников в диапазоне ${elo - w}–${elo + w} ELO · состав заполняется ботами`;
       if (Date.now() - t0 > found) {
         clearInterval(this.queueTimer);
         // accept dialog with veto (ban two maps, random from the rest)
         const pool = [...MAP_DEFS].sort(() => Math.random() - 0.5).slice(0, 5);
         const banned = new Set<string>();
         const renderVeto = () => {
-          box.replaceChildren(h('h2', {}, 'Матч найден'), h('p', { class: 'sub' }, `Исключите ${2 - banned.size} карт(ы). Соперники — ИИ.`),
+          box.replaceChildren(h('h2', {}, 'Матч найден'), h('p', { class: 'sub' }, `Исключите ${2 - banned.size} карт(ы). Соперники — боты.`),
             h('div', { class: 'grid' }, pool.map(d => h('div', { class: `card click map-card${banned.has(d.id) ? ' sel' : ''}`, style: banned.has(d.id) ? 'opacity:.35' : '', onclick: () => {
               if (banned.has(d.id)) return;
               banned.add(d.id);
@@ -462,7 +518,8 @@ export class MainMenu {
 
   private profileView(c: HTMLElement): void {
     const p = this.app.profile;
-    const nameInput = h('input', { type: 'text', value: p.name, maxlength: 20 });
+    const nameInput = h('input', { type: 'text', value: p.name, maxlength: NAME_MAX });
+    const nameErr = h('span', { class: 'sub', style: 'color:#ff8a7a' });
     const ranks = ranksFor(p);
     const comp = p.competitive;
     const hist = comp.rankHistory;
@@ -475,7 +532,11 @@ export class MainMenu {
     add(c, 
       h('h1', {}, 'Профиль'),
       p.tampered ? h('div', { class: 'warn' }, 'Локальные данные профиля были изменены вне игры. Рейтинг помечен как непроверенный.') : null,
-      h('div', { class: 'row' }, h('label', {}, 'Имя'), nameInput, h('button', { class: 'btn ghost', onclick: () => { p.name = nameInput.value.trim().slice(0, 20) || 'Игрок'; this.app.save(); this.show('profile'); } }, 'Сохранить')),
+      h('div', { class: 'row' }, h('label', {}, 'Имя'), nameInput, h('button', { class: 'btn ghost', onclick: () => {
+        const v = validateName(nameInput.value);
+        if (!v.ok) { nameErr.textContent = v.error; return; }
+        p.name = v.name; p.nameSet = true; this.app.save(); this.show('profile');
+      } }, 'Сохранить'), nameErr),
       h('h2', {}, `Уровень аккаунта ${p.level}`),
       h('div', { class: 'bar', style: 'max-width:520px' }, h('i', { style: `width:${(p.xp / xpForLevel(p.level)) * 100}%` })),
       h('p', { class: 'sub' }, `${p.xp} / ${xpForLevel(p.level)} XP`),
@@ -486,8 +547,9 @@ export class MainMenu {
       h('div', { class: 'row' }, ranks.map(r => h('div', { style: 'text-align:center;width:90px' }, svg(rankEmblemSvg(r, 48)), h('div', { style: 'font-size:12px' }, r.name), h('div', { style: 'font-size:11px;color:var(--muted)' }, r.min)))),
       h('h2', {}, 'Данные'),
       h('div', { class: 'row' },
-        h('button', { class: 'btn ghost', onclick: () => { const blob = new Blob([JSON.stringify(p, null, 1)], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(blob), download: 'strikezone-profile.json' }); a.click(); } }, 'Экспорт профиля'),
-        h('button', { class: 'btn danger', onclick: () => { if (confirm('Сбросить весь прогресс?')) { localStorage.removeItem('strikezone.profile.v1'); location.reload(); } } }, 'Сбросить прогресс')),
+        // file downloads are not allowed on Yandex Games
+        platform().id === 'yandex' ? null : h('button', { class: 'btn ghost', onclick: () => { const blob = new Blob([JSON.stringify(p, null, 1)], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(blob), download: 'strikezone-profile.json' }); a.click(); } }, 'Экспорт профиля'),
+        h('button', { class: 'btn danger', onclick: () => this.confirmReset() }, 'Сбросить прогресс')),
     );
   }
 
@@ -515,7 +577,7 @@ export class MainMenu {
     };
     tabs.append(...([['all', 'Общая'], ['modes', 'По режимам'], ['maps', 'По картам'], ['weapons', 'По оружию']] as const).map(([id, n]) => h('button', { class: tab === id ? 'active' : '', onclick: (e: Event) => { tab = id; tabs.querySelectorAll('button').forEach(b => b.classList.remove('active')); (e.target as HTMLElement).classList.add('active'); render(); } }, n)));
     render();
-    add(c, h('h1', {}, 'Статистика'), h('div', { class: 'note' }, 'Все матчи в этой версии сыграны против ботов (ИИ); статистика помечена соответствующим образом и не смешивается с играми против людей.'), tabs, body);
+    add(c, h('h1', {}, 'Статистика'), h('div', { class: 'note' }, 'Все матчи в этой версии сыграны против ботов; статистика помечена соответствующим образом и не смешивается с играми против людей.'), tabs, body);
   }
 
   private history(c: HTMLElement): void {
@@ -526,7 +588,7 @@ export class MainMenu {
       p.history.length ? h('table', { class: 'tbl' },
         h('tr', {}, ['Дата', 'Режим', 'Карта', 'Итог', 'Счёт', 'У/С/П', 'ADR', 'HS%', 'Рейтинг', 'Изменение'].map(t => h('th', {}, t))),
         p.history.map(m => h('tr', {},
-          h('td', {}, new Date(m.time).toLocaleString()), h('td', {}, `${modeName(m.mode)} · ИИ`), h('td', {}, getMap(m.map).def.name),
+          h('td', {}, new Date(m.time).toLocaleString()), h('td', {}, `${modeName(m.mode)} · боты`), h('td', {}, getMap(m.map).def.name),
           h('td', {}, h('span', { class: `pill ${m.outcome === 1 ? 'good' : m.outcome === 0 ? 'bad' : ''}` }, m.placement ? `#${m.placement}` : m.outcome === 1 ? 'Победа' : m.outcome === 0 ? (m.abandoned ? 'Выход' : 'Поражение') : 'Ничья')),
           h('td', {}, `${m.score[0]}:${m.score[1]}`), h('td', {}, `${m.kills}/${m.deaths}/${m.assists}`), h('td', {}, m.adr), h('td', {}, `${m.hs}%`), h('td', {}, m.rating.toFixed(2)),
           h('td', {}, m.visibleDelta !== undefined ? `${m.visibleDelta >= 0 ? '+' : ''}${m.visibleDelta} очк.` : m.eloDelta !== undefined ? `${m.eloDelta >= 0 ? '+' : ''}${m.eloDelta} ELO` : '—'),
@@ -578,7 +640,16 @@ export class MainMenu {
         const cap = h('span', { class: 'keycap' }, s.controls.bindings[a] ?? '—');
         cap.addEventListener('click', () => {
           cap.classList.add('wait'); cap.textContent = 'нажмите клавишу…';
-          const on = (e: KeyboardEvent) => { e.preventDefault(); if (e.code !== 'Escape') s.controls.bindings[a] = e.code; window.removeEventListener('keydown', on, true); save(); renderBinds(); };
+          const on = (e: KeyboardEvent) => {
+            e.preventDefault(); e.stopPropagation();
+            if (e.code !== 'Escape') {
+              // a key already used by another action: swap the two bindings instead of losing one
+              const other = Object.keys(s.controls.bindings).find(k => k !== a && s.controls.bindings[k] === e.code);
+              if (other) s.controls.bindings[other] = s.controls.bindings[a];
+              s.controls.bindings[a] = e.code;
+            }
+            window.removeEventListener('keydown', on, true); save(); renderBinds();
+          };
           window.addEventListener('keydown', on, true);
         });
         return [h('label', {}, labels[a] ?? a), cap];
