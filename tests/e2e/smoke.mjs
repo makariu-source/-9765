@@ -99,7 +99,8 @@ for (const mapId of ['sandstorm', 'oasis', 'villa', 'reactor', 'ruins', 'canal',
   await step(`models on floor: ${mapId}`, async () => {
     await page.evaluate(m => window.__app.start({ mode: 'competitive', mapId: m }), mapId);
     await page.waitForSelector('.hud', { timeout: 30000 });
-    await page.waitForTimeout(1000);
+    // measure only once the match is really running (frames rendered), not right after creation
+    await page.waitForFunction(() => window.__app.session && window.__app.session.game.time > 1, null, { timeout: 60000 });
     const worst = await page.evaluate(() => new Promise(done => {
       const s = window.__app.session; let w = 0, n = 0;
       const tick = () => {
@@ -124,6 +125,14 @@ await step('spectator', async () => {
   }
   const st = await page.evaluate(() => { const g = window.__app.spectator.game; return { t: g.time, human: g.humanId, bots: g.actors.length }; });
   if (st.human !== -1 || st.bots !== 10 || st.t < 1) throw new Error(`spectator state ${JSON.stringify(st)}`);
+  // pick any player from the list (an attacker), see-through-walls on
+  const rows = page.locator('.sp-row');
+  const bb = await rows.nth(6).boundingBox();
+  await page.mouse.click(bb.x + 20, bb.y + 8);
+  await page.waitForTimeout(400);
+  const picked = await page.evaluate(() => { const s = window.__app.spectator; return { team: s.game.actors[s.followId].team, xray: s.renderer.xray }; });
+  if (picked.team !== 'T' || !picked.xray) throw new Error(`player list / x-ray: ${JSON.stringify(picked)}`);
+  await shot('64-spec-players');
   await page.keyboard.press('Escape');
   await page.waitForSelector('.nav', { timeout: 10000 });
 });

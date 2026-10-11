@@ -124,10 +124,35 @@ export class Renderer {
     if (Math.abs(this.camera.fov - vf) > 0.01) { this.camera.fov = vf; this.camera.updateProjectionMatrix(); }
   }
 
+  /**
+   * Spectator x-ray: meshes enabled on layer 1 (CT) / 2 (T) are drawn again as flat team-colored
+   * silhouettes wherever something (a wall) hides them. Off for players.
+   */
+  xray = false;
+  static readonly XRAY_LAYER = { CT: 1, T: 2 } as const;
+  private xrayMats = (['#5aa0ff', '#ff9a2e'] as const).map(color => new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.6, fog: false, depthWrite: false, depthFunc: THREE.GreaterDepth,
+  }));
+
+  private renderXray(): void {
+    const savedMask = this.camera.layers.mask, bg = this.scene.background, fog = this.scene.fog;
+    const autoShadow = this.renderer.shadowMap.autoUpdate;
+    this.scene.background = null; this.scene.fog = null; this.renderer.shadowMap.autoUpdate = false;
+    [Renderer.XRAY_LAYER.CT, Renderer.XRAY_LAYER.T].forEach((layer, i) => {
+      this.camera.layers.set(layer);
+      this.scene.overrideMaterial = this.xrayMats[i];
+      this.renderer.render(this.scene, this.camera);
+    });
+    this.scene.overrideMaterial = null;
+    this.camera.layers.mask = savedMask;
+    this.scene.background = bg; this.scene.fog = fog; this.renderer.shadowMap.autoUpdate = autoShadow;
+  }
+
   render(vm: ViewModel | null, t: number): void {
     this.mapView?.update(t);
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
+    if (this.xray) this.renderXray();
     if (vm) {
       this.renderer.clearDepth();
       vm.setAspect(this.camera.aspect);

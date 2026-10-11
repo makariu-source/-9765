@@ -12,7 +12,7 @@ import { WEAPONS } from '../sim/weapons';
 import { sfx } from './audio/sfx';
 import { CharacterView } from './render/characters';
 import { Effects } from './render/effects';
-import type { Renderer } from './render/renderer';
+import { Renderer } from './render/renderer';
 import { ViewModel } from './render/viewmodel';
 import { fmtTime, h } from './ui/dom';
 import { escapeHtml } from './ui/hud';
@@ -20,6 +20,9 @@ import { Minimap, type RadarMarker } from './ui/minimap';
 import { Scoreboard } from './ui/panels';
 
 type Cam = 'auto' | 'follow' | 'eyes' | 'free';
+/** See-through-walls: enemies of the followed bot, everyone, or off. */
+type Xray = 'enemies' | 'all' | 'off';
+const XRAY_NAMES: Record<Xray, string> = { enemies: 'Сквозь стены: враги', all: 'Сквозь стены: все', off: 'Сквозь стены: выкл' };
 
 /** What a bot is doing, in words (from its team role and current goal). */
 const ROLE_NAMES: Record<string, string> = {
@@ -63,6 +66,13 @@ export class SpectatorSession {
   private ended = false;
   private endAt = 0;
   private sbHeld = false;
+  private xray: Xray = 'enemies';
+  private xrayBtn: HTMLButtonElement;
+  private players: HTMLDivElement;
+  private playersOpen = window.innerWidth >= 900;
+  private playersAt = 0;
+  /** when the viewer last picked a bot by hand (a fallen pick is not skipped automatically) */
+  private pickedAt = -1;
   private centerUntil = 0;
   private orbit = { yaw: 0.7, pitch: -0.75, dist: 75, drag: false, lx: 0, ly: 0 };
   private chase = { yaw: 0 };
@@ -90,21 +100,35 @@ export class SpectatorSession {
     this.info = h('div', { class: 'spec-info' });
     this.center = h('div', { class: 'center-msg', style: 'opacity:0' });
     this.labels = h('div', { style: 'position:absolute;inset:0' });
+    // clickable list of every player (both teams, alive or dead)
+    this.players = h('div', { class: 'spec-players' });
+    // pointerdown, not click: the list re-renders a few times a second and a click could be lost
+    this.players.addEventListener('pointerdown', e => {
+      const row = (e.target as HTMLElement).closest('[data-id]') as HTMLElement | null;
+      if (!row) return;
+      this.followId = +row.dataset.id!;
+      this.pickedAt = this.game.time;
+      if (this.cam === 'auto' || this.cam === 'free') this.setCam('follow');
+      this.playersAt = 0;
+    });
     const hud = h('div', { class: 'hud' }, h('div', { class: 'tl' }, this.minimap.canvas), this.top, this.feed, this.center, this.labels, this.info);
     const btn = (label: string, f: () => void, title = '') => h('button', { class: 'btn ghost', title, onclick: f }, label);
     const camBtn = (c: Cam, label: string) => { const b = btn(label, () => this.setCam(c)); this.camBtns.set(c, b); return b; };
     const pauseBtn = btn('❚❚', () => { this.paused = !this.paused; pauseBtn.textContent = this.paused ? '▶' : '❚❚'; }, 'Пауза (пробел)');
-    this.botSel = h('select', { onchange: (e: Event) => { this.followId = +(e.target as HTMLSelectElement).value; if (this.cam === 'auto' || this.cam === 'free') this.setCam('follow'); } });
+    this.botSel = h('select', { onchange: (e: Event) => { this.followId = +(e.target as HTMLSelectElement).value; this.pickedAt = this.game.time; if (this.cam === 'auto' || this.cam === 'free') this.setCam('follow'); } });
     const sbBtn = btn('Таблица', () => { this.sbHeld = !this.sbHeld; }, 'Tab');
+    this.xrayBtn = btn(XRAY_NAMES[this.xray], () => this.cycleXray(), 'X — видеть бойцов сквозь стены');
+    const plBtn = btn('Игроки', () => { this.playersOpen = !this.playersOpen; this.playersAt = 0; }, 'P — список всех бойцов');
     const bar = h('div', { class: 'replay-bar spec-bar' },
       pauseBtn,
       h('select', { title: 'Скорость', onchange: (e: Event) => { this.speed = +(e.target as HTMLSelectElement).value; } }, [0.5, 1, 2, 4].map(s => h('option', { value: s, selected: s === 1 }, `×${s}`))),
       camBtn('auto', 'Авто'), camBtn('follow', 'За бойцом'), camBtn('eyes', 'Глаза'), camBtn('free', 'Карта'),
       btn('◀', () => this.cycle(-1), 'Предыдущий боец (←)'), this.botSel, btn('▶', () => this.cycle(1), 'Следующий боец (→)'),
-      sbBtn,
+      this.xrayBtn, plBtn, sbBtn,
       h('button', { class: 'btn', onclick: () => this.end(true) }, 'Выход'),
     );
-    this.root = h('div', { class: 'spectator', style: 'position:absolute;inset:0' }, hud, this.scoreboard.root, bar);
+    this.root = h('div', { class: 'spectator', style: 'position:absolute;inset:0' }, hud, this.players, this.scoreboard.root, bar);
+    this.renderer.xray = true;
     this.uiRoot.append(this.root);
     this.setCam('auto');
     this.refreshBotList();
@@ -139,6 +163,8 @@ export class SpectatorSession {
     else if (e.code === 'Digit2') this.setCam('follow');
     else if (e.code === 'Digit3') this.setCam('eyes');
     else if (e.code === 'Digit4') this.setCam('free');
+    else if (e.code === 'KeyX') this.cycleXray();
+    else if (e.code === 'KeyP') { this.playersOpen = !this.playersOpen; this.playersAt = 0; }
     else if (e.code === 'Escape') this.end(true);
   };
   private onKeyUp = (e: KeyboardEvent) => { if (e.code === 'Tab') this.sbHeld = false; };
@@ -148,6 +174,26 @@ export class SpectatorSession {
     this.chase.yaw = 0;
     this.renderer.setRoofsVisible(c !== 'free');
     for (const [k, b] of this.camBtns) b.classList.toggle('on', k === c);
+  }
+
+  private cycleXray(): void {
+    const order: Xray[] = ['enemies', 'all', 'off'];
+    this.xray = order[(order.indexOf(this.xray) + 1) % order.length];
+    this.xrayBtn.textContent = XRAY_NAMES[this.xray];
+    this.xrayBtn.classList.toggle('on', this.xray !== 'off');
+  }
+
+  /** Put living soldiers that should show through walls on the x-ray layer of their team. */
+  private applyXray(view: Actor): void {
+    const { CT, T } = Renderer.XRAY_LAYER;
+    for (const a of this.game.actors) {
+      const show = a.alive && this.xray !== 'off' && (this.xray === 'all' || (this.game.mode.ffa ? a !== view : a.team !== view.team));
+      const layer = !show ? 0 : a.team === 'CT' ? CT : T;
+      this.chars.get(a.id)!.root.traverse(o => {
+        o.layers.disable(CT); o.layers.disable(T);
+        if (layer) o.layers.enable(layer);
+      });
+    }
   }
 
   private cycle(dir: number): void {
@@ -244,6 +290,7 @@ export class SpectatorSession {
       camPos = { x: pivot.x + back.x * d, y: pivot.y + back.y * d, z: pivot.z + back.z * d };
       this.renderer.setView(camPos, yaw, pitch, 80, dt);
     }
+    this.applyXray(view);
     sfx.setListener(camPos, { x: -Math.sin(view.yaw), y: 0, z: -Math.cos(view.yaw) });
     this.effects.sync(g, dt);
     this.renderer.render(eyes ? this.vm : null, now);
@@ -265,7 +312,11 @@ export class SpectatorSession {
   /** Director camera: stay on whoever is in the action, switch at most every few seconds. */
   private pickDirectorTarget(g: Game): void {
     const cur = g.actors[this.followId];
-    if (this.cam !== 'auto') { if (!cur?.alive && g.time - (cur?.deathTime ?? 0) > 2.5) this.cycle(1); return; }
+    if (this.cam !== 'auto') {
+      const pickedDead = cur && !cur.alive && cur.deathTime < this.pickedAt;
+      if (!cur?.alive && !pickedDead && g.time - (cur?.deathTime ?? 0) > 2.5) this.cycle(1);
+      return;
+    }
     if (cur?.alive && g.time < this.autoUntil) return;
     if (!cur?.alive && cur && g.time - cur.deathTime < 2) return; // let the death play out
     let best: Actor | null = null, bs = -Infinity;
@@ -412,6 +463,10 @@ export class SpectatorSession {
       `<span style="color:#cbd5e1">${escapeHtml(this.intent(view) || (view.alive ? '' : 'погиб'))}</span><br><small style="color:#9ca3af">Камера: ${camName}${this.paused ? ' · пауза' : ''}${this.speed !== 1 ? ` · ×${this.speed}` : ''}</small>`;
     this.minimap.draw(this.radar(g, view));
     this.drawLabels(g, view);
+    if (now > this.playersAt) { this.playersAt = now + 0.25; this.drawPlayers(g, view); }
+    if (this.botSel.value !== String(view.id)) this.botSel.value = String(view.id);
+    // keep the info card above the control bar (it wraps on narrow screens)
+    this.info.style.bottom = `${(this.root.querySelector('.spec-bar') as HTMLElement).offsetHeight + 10}px`;
   }
 
   private radar(g: Game, view: Actor): RadarMarker[] {
@@ -428,6 +483,23 @@ export class SpectatorSession {
       out.push({ x: p.x, z: p.z, color: '#ff4030', kind: 'bomb' });
     }
     return out;
+  }
+
+  private drawPlayers(g: Game, view: Actor): void {
+    this.players.classList.toggle('hidden', !this.playersOpen);
+    if (!this.playersOpen) return;
+    const teams = g.mode.ffa ? [g.actors.slice()] : (['CT', 'T'] as const).map(t => g.actors.filter(a => a.team === t));
+    this.players.innerHTML = teams.map((list, i) => {
+      const head = g.mode.ffa ? 'Все бойцы' : i === 0 ? 'Спецназ' : 'Атака';
+      return `<div class="sp-head ${g.mode.ffa ? '' : i === 0 ? 'k-ct' : 'k-t'}">${head}</div>` + list.map(a => {
+        const def = a.activeDef();
+        const role = this.intent(a).split(' · ')[0];
+        return `<div class="sp-row${a.id === view.id ? ' on' : ''}${a.alive ? '' : ' dead'}" data-id="${a.id}">` +
+          `<span class="sp-name ${a.team === 'CT' ? 'k-ct' : 'k-t'}">${escapeHtml(a.name)}</span>` +
+          `<span class="sp-hp"><i style="width:${a.alive ? a.health : 0}%"></i></span>` +
+          `<span class="sp-w">${a.alive ? escapeHtml(def.name) : '✝'}${role && a.alive ? ` · ${escapeHtml(role)}` : ''}</span></div>`;
+      }).join('');
+    }).join('');
   }
 
   /** Name + intent above every living bot (pooled DOM nodes). */
@@ -498,6 +570,7 @@ export class SpectatorSession {
     window.removeEventListener('keyup', this.onKeyUp);
     sfx.stopLoops();
     this.renderer.setRoofsVisible(true);
+    this.renderer.xray = false;
     this.root.remove();
     for (const cv of this.chars.values()) cv.dispose();
     this.effects.dispose();
