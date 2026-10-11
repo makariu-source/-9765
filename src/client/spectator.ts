@@ -6,6 +6,7 @@ import type { Actor } from '../sim/actor';
 import { TICK, type Game } from '../sim/game';
 import { createMatch, type Match, type MatchSetup } from '../match';
 import { DIFFICULTY_NAMES } from '../ai/difficulty';
+import { PLAN_NAMES } from '../ai/team';
 import { clamp, lerp, vdist, type Vec3 } from '../sim/math';
 import type { GameEvent } from '../sim/types';
 import { WEAPONS } from '../sim/weapons';
@@ -35,6 +36,10 @@ const GOAL_NAMES: Record<string, string> = {
   'post-plant': 'держит бомбу', flank: 'обходит в тыл', lurk: 'крадётся', 'flank-wait': 'ждёт обхода', push: 'вышел вперёд',
   roam: 'разведка', 'search bomb': 'ищет бомбу', roam_dm: 'бродит',
   save: 'сейвит оружие (прячется)', 'hunt-save': 'ищет сейверов',
+  fake: 'фейк: шумит на другой точке', noise: 'ложный шум', bombfake: 'фейк, бомба у другого', doublefake: 'двойной фейк',
+  fakeback: 'ложный выход', rotbait: 'давит, ждёт ротацию', draw: 'перетяжка: ждёт', sneak: 'тихо идёт на точку',
+  'fake-retreat': 'ложный отход: ждёт на угле', 'ct-fake-util': 'фейковая граната', 'ct-noise': 'ложный шум',
+  'ct-fake-rotate': 'ложная ротация',
 };
 
 export class SpectatorSession {
@@ -209,7 +214,7 @@ export class SpectatorSession {
     const g = this.game;
     const sorted = g.actors.slice().sort((a, b) => (a.team === b.team ? a.id - b.id : a.team === 'CT' ? -1 : 1));
     this.botSel.replaceChildren(...sorted.map(a => h('option', { value: a.id, selected: a.id === this.followId },
-      `${a.team === 'CT' ? 'Спецназ' : 'Атака'} · ${a.name}${a.alive ? '' : ' ✝'}`)));
+      `${a.team === 'CT' ? 'Спецназ' : 'Атака'} · ${a.name}${a.alive ? '' : ' (погиб)'}`)));
   }
 
   // --- loop -------------------------------------------------------------------
@@ -453,6 +458,12 @@ export class SpectatorSession {
     this.top.innerHTML = ffa
       ? `<div class="${timerCls}">${fmtTime(hud.timer)}</div>`
       : `<div class="alive" style="color:var(--ct)">${alive('CT')}</div><div class="score ct">${ctScore}</div><div class="${timerCls}">${fmtTime(hud.timer)}</div><div class="score t">${tScore}</div><div class="alive" style="color:var(--t)">${alive('T')}</div>`;
+    if (!ffa && g.mode.allowBomb) {
+      // what each team is up to this round (spectators only)
+      const tb = this.match.director.brains.find(b => b.team === 'T'), cb = this.match.director.brains.find(b => b.team === 'CT');
+      const tPlan = tb ? `${PLAN_NAMES[tb.planKind]}${tb.fakeSite && tb.fakeSite !== tb.site ? ` (${tb.fakeSite})` : ''} → ${tb.site}` : '';
+      this.top.insertAdjacentHTML('beforeend', `<div class="spec-plan"><span class="k-t">Атака: ${escapeHtml(tPlan)}</span>${cb?.ctSetup ? ` · <span class="k-ct">Спецназ: ${escapeHtml(cb.ctSetup)}</span>` : ''}</div>`);
+    }
     if (now > this.centerUntil) this.center.style.opacity = '0';
     // followed bot
     const bot = this.match.director.bots.find(b => b.actor === view);
@@ -498,7 +509,7 @@ export class SpectatorSession {
         return `<div class="sp-row${a.id === view.id ? ' on' : ''}${a.alive ? '' : ' dead'}" data-id="${a.id}">` +
           `<span class="sp-name ${a.team === 'CT' ? 'k-ct' : 'k-t'}">${escapeHtml(a.name)}</span>` +
           `<span class="sp-hp"><i style="width:${a.alive ? a.health : 0}%"></i></span>` +
-          `<span class="sp-w">${a.alive ? escapeHtml(def.name) : '✝'}${role && a.alive ? ` · ${escapeHtml(role)}` : ''}</span></div>`;
+          `<span class="sp-w">${a.alive ? escapeHtml(def.name) : 'погиб'}${role && a.alive ? ` · ${escapeHtml(role)}` : ''}</span></div>`;
       }).join('');
     }).join('');
   }

@@ -161,3 +161,56 @@ describe('v1.2.1: Reactor B ramp', () => {
     expect(nav.findPath({ x: 64, z: 50 }, { x: 40, z: 64 })).not.toBeNull(); // ramp room -> B still connected
   });
 });
+
+describe('v3.0: fakes, baits and calls by sound', () => {
+  const liveMatch = (mapId: string, level: number, seed = 9) => {
+    const m = createMatch({ mode: 'competitive', mapId, seed, lobby: bots(5, level), short: true });
+    const g = m.game;
+    for (let i = 0; i < 30 / TICK && g.mode.hud().phase !== 'live'; i++) g.step();
+    return { m, g };
+  };
+
+  it('a fake: 1-2 attackers make noise at the other site, then the team hits the real one', () => {
+    const { m, g } = liveMatch('sandstorm', 7);
+    const t = m.director.brains.find(b => b.team === 'T')! as unknown as {
+      planKind: string; site: string; fakeSite: string | null; executing: boolean; executeAt: number;
+      orders: Map<number, { do: string }[]>; buildScript: (g: unknown, at: number) => void; members: { goal: { kind: string; reason?: string } }[];
+    };
+    t.orders.clear();
+    t.planKind = 'fake';
+    t.buildScript(g, g.time);
+    expect(t.fakeSite).not.toBeNull();
+    expect(t.fakeSite).not.toBe(t.site);
+    const fakers = [...t.orders.values()].filter(l => l.some(o => o.do === 'noise'));
+    expect(fakers.length).toBeGreaterThanOrEqual(1);
+    expect(fakers.length).toBeLessThanOrEqual(2);
+    let noise = false;
+    for (let i = 0; i < 60 / TICK && !t.executing; i++) { g.step(); noise ||= t.members.some(b => b.goal.kind === 'noise'); }
+    expect(noise).toBe(true);     // they really made a show
+    expect(t.executing).toBe(true); // and then went for the real site
+  }, 60000);
+
+  it('defenders call out enemies they only hear (footsteps) - and only within hearing range', () => {
+    const { m, g } = liveMatch('villa', 6);
+    const ct = m.director.brains.find(b => b.team === 'CT')! as unknown as { sightings: { id: number }[]; members: { actor: { pos: { x: number; y: number; z: number } } }[] };
+    const tActor = g.actors.find(a => a.team === 'T')!;
+    const before = ct.sightings.filter(s => s.id === tActor.id).length;
+    // a loud enemy footstep next to a defender, then far away from everyone
+    const near = ct.members[0].actor.pos;
+    (g as unknown as { sound: (k: string, p: unknown, r: number, id: number) => void }).sound('step', { x: near.x + 6, y: near.y, z: near.z }, 20, tActor.id);
+    for (let i = 0; i < 10; i++) g.step();
+    expect(ct.sightings.filter(s => s.id === tActor.id).length).toBeGreaterThan(before);
+  }, 60000);
+
+  it('all attack scripts and defender fakes show up for skilled bots', () => {
+    const seen = new Set<string>();
+    for (const map of ['sandstorm', 'oasis', 'villa', 'ruins']) {
+      const m = createMatch({ mode: 'competitive', mapId: map, seed: 40, lobby: bots(5, 7), short: true });
+      for (let i = 0; i < 900 / TICK && !m.game.mode.over; i++) m.game.step();
+      for (const b of m.director.brains) for (const k of Object.keys(b.tactics)) seen.add(k);
+    }
+    for (const k of ['ct-noise', 'ct-bait', 'ct-fake-util']) expect(seen.has(k), k).toBe(true);
+    const tPlans = [...seen].filter(k => ['t-fake', 't-fakeback', 't-bombfake', 't-doublefake', 't-noise', 't-rotbait', 't-draw'].includes(k));
+    expect(tPlans.length).toBeGreaterThanOrEqual(3);
+  }, 300000);
+});

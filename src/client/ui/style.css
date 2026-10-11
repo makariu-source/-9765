@@ -250,3 +250,6 @@ select, input[type=text], input[type=number] { background: var(--panel2); color:
 .spectator .spec-players .sp-w { grid-column: 1 / 3; font-size: 11px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spectator .spec-players.hidden { display: none; }
 @media (max-width: 700px) { .spectator .spec-players { top: 140px; width: 190px; max-height: calc(100% - 260px); font-size: 12px; } }
+.spectator .hud .top { flex-wrap: wrap; justify-content: center; }
+.spectator .spec-plan { flex-basis: 100%; text-align: center; font-size: 13px; background: rgba(0,0,0,.45); padding: 2px 10px; border-radius: 6px; white-space: nowrap; }
+@media (max-width: 700px) { .spectator .spec-plan { font-size: 11px; white-space: normal; } }

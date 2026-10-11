@@ -23,7 +23,22 @@ import { hidingSpots } from './save';
 export type Role = 'entry' | 'support' | 'lurk' | 'awp' | 'anchor' | 'rotator' | 'flank' | 'push' | 'roamer';
 
 interface Spot { pos: Vec3; look: Vec3 }
-export type PlanKind = 'rush' | 'execute' | 'split' | 'default' | 'chaos';
+export type PlanKind = 'rush' | 'execute' | 'split' | 'default' | 'chaos'
+  // v3 attack scripts (see buildScript)
+  | 'fake' | 'fakeback' | 'bombfake' | 'doublefake' | 'noise' | 'rotbait' | 'draw';
+
+/** Human-readable plan names (radio / spectator). */
+export const PLAN_NAMES: Record<PlanKind, string> = {
+  rush: 'раш', execute: 'выход с гранатами', split: 'сплит', default: 'дефолт', chaos: 'кто куда',
+  fake: 'фейк на другую точку', fakeback: 'ложный выход и отход', bombfake: 'фейк с бомбой', doublefake: 'двойной фейк',
+  noise: 'ложный шум', rotbait: 'приманка на ротацию', draw: 'перетяжка',
+};
+
+/** One step of a scripted plan for one bot; when the list is done the bot plays the normal attack. */
+type Order =
+  | { do: 'move'; pos: Vec3; walk?: boolean; tag: string }
+  | { do: 'hold'; pos: Vec3; look: Vec3; until: number | 'go'; tag: string }
+  | { do: 'noise'; pos: Vec3; look: Vec3; dur: number; nade: boolean; tag: string; started?: number; quiet?: boolean };
 
 interface RoundHistory { side: Team; site: string | null; won: boolean; contact: string | null }
 
@@ -69,6 +84,15 @@ export class TeamBrain {
   private reachedSite = new Set<number>();
   /** bots sent to hunt enemies who hide to save their guns, and the spots they check */
   private hunters = new Map<number, { spots: Vec3[]; k: number }>();
+  /** scripted per-bot orders of the current plan (fakes etc.) */
+  private orders = new Map<number, Order[]>();
+  private ctFakeRot = false;
+  /** site we pretend to hit (fakes), and when the bait / draw decision is taken */
+  fakeSite: string | null = null;
+  private baitFrom = 0;
+  private drawAt = 0;
+  /** defenders: current setup description (spectator) */
+  ctSetup = '';
   private nextHuntCheck = 0;
   private clearIdx = new Map<number, number>();
   /** how often each tactic was used (analysis, spectator overlay) */
@@ -111,6 +135,7 @@ export class TeamBrain {
     this.repositionAt.clear(); this.flankDecided.clear();
     this.reachedSite.clear(); this.clearIdx.clear();
     this.hunters.clear(); this.nextHuntCheck = 0;
+    this.orders.clear(); this.ctFakeRot = false; this.fakeSite = null; this.baitFrom = 0; this.drawAt = 0; this.ctSetup = '';
     const m = g.mode as BombMode;
     this.pistolRound = m.round === 1 || m.round === m.regulationHalf + 1;
     this.decideEconomy(g);
@@ -162,11 +187,172 @@ export class TeamBrain {
     const r = this.rng.next();
     if (coord < 0.3) this.planKind = 'chaos';
     else if (coord < 0.55) this.planKind = r < 0.5 ? 'rush' : 'execute';
-    else this.planKind = r < 0.2 ? 'rush' : r < 0.45 ? 'split' : r < 0.75 ? 'execute' : 'default';
+    else {
+      // well-coordinated teams also run fakes, baits and draws
+      const table: [PlanKind, number][] = [['execute', 0.2], ['rush', 0.1], ['split', 0.12], ['default', 0.08], ['fake', 0.1], ['fakeback', 0.07],
+        ['bombfake', 0.06], ['doublefake', 0.05], ['noise', 0.08], ['rotbait', 0.08], ['draw', 0.06]];
+      let x = r * table.reduce((t, [, w]) => t + w, 0);
+      this.planKind = table.find(([, w]) => (x -= w) < 0)?.[0] ?? 'execute';
+    }
     if (this.economy === 'eco' && coord > 0.5) this.planKind = r < 0.5 ? 'rush' : 'execute'; // eco stack
+    const twoSites = !g.mode.allowedSites && g.map.sites.length > 1;
+    if (!twoSites && ['fake', 'bombfake', 'doublefake', 'noise', 'rotbait', 'draw'].includes(this.planKind)) this.planKind = 'execute';
     const roundTime = m.cfg?.roundTime ?? 115;
     this.executeAt = freezeEnd + (this.planKind === 'rush' ? 0 : this.planKind === 'default' ? roundTime * this.rng.range(0.35, 0.5) : roundTime * this.rng.range(0.15, 0.3));
     this.assignAttack(g);
+    this.buildScript(g, freezeEnd);
+    if (this.planKind !== 'execute' && this.planKind !== 'rush' && this.planKind !== 'chaos') this.note(`t-${this.planKind}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scripted attack plans (fakes, baits, draws). Fake noise is real: footsteps, shots and
+  // grenades the defenders hear and call out, so it only works when they actually react.
+
+  /** A point on the attackers' lane into `site` (frac 1 = the entry). */
+  private lanePoint(g: Game, site: string, frac: number, pick = 0): { pos: Vec3; look: Vec3 } | null {
+    const rs = g.analysis.routes.filter(r => r.site === site);
+    if (!rs.length) return null;
+    const r = rs[pick % rs.length];
+    const c = r.cells[Math.min(r.cells.length - 1, Math.floor(r.cells.length * frac))];
+    const sc = g.map.sites.find(x => x.id === site)!.center;
+    return { pos: g.nav.center(c.i, c.j), look: { x: sc.x, y: sc.y + 1.4, z: sc.z } };
+  }
+
+  private travel(g: Game, from: Vec3, to: Vec3): number {
+    const p = g.nav.findPath(from, to);
+    return p ? p.length * 2 / 5.2 : 20;
+  }
+
+  private buildScript(g: Game, liveAt: number): void {
+    const kind = this.planKind;
+    const bots = this.members.filter(b => b.actor.alive);
+    if (bots.length < 2) return;
+    const real = this.site;
+    const other = (g.map.sites.find(s => s.id !== real)?.id ?? real) as string;
+    const byNade = (list: BotController[]) => list.slice().sort((x, y) => y.actor.grenades.length - x.actor.grenades.length);
+    const notCarrier = bots.filter(b => !b.actor.hasBomb && this.roles.get(b.actor.id) !== 'lurk' && this.roles.get(b.actor.id) !== 'flank');
+    const set = (b: BotController, list: Order[]) => this.orders.set(b.actor.id, list);
+    const noiseAt = (site: string, pick: number, dur: number, nade: boolean, tag: string): Order[] => {
+      const p = this.lanePoint(g, site, 0.92, pick);
+      return p ? [{ do: 'move', pos: p.pos, tag }, { do: 'noise', pos: p.pos, look: p.look, dur, nade, tag }] : [];
+    };
+    const realStage = (b: BotController): Vec3 => this.stages.get(b.actor.id) ?? this.lanePoint(g, real, 0.6)!.pos;
+    switch (kind) {
+      case 'fake': case 'noise': {
+        // 1-2 players make a show at the other site; the rest wait quietly for the real hit
+        const n = Math.min(2, Math.max(1, bots.length - 3));
+        const fakers = byNade(notCarrier).slice(0, n);
+        if (!fakers.length) { this.planKind = 'execute'; return; }
+        this.fakeSite = other;
+        let longest = 0;
+        fakers.forEach((b, k) => {
+          const list = noiseAt(other, k, kind === 'noise' ? 7 : 5, kind === 'fake', kind);
+          if (kind === 'noise') { const q = this.lanePoint(g, other, 0.7, k); if (q) list.splice(1, 0, { do: 'move', pos: q.pos, tag: 'noise' }, { do: 'move', pos: list[0]?.pos ?? q.pos, tag: 'noise' }); }
+          set(b, list);
+          longest = Math.max(longest, this.travel(g, b.actor.pos, list[0]?.pos ?? b.actor.pos) + (kind === 'noise' ? 14 : 5));
+        });
+        // the others sneak (walk) to the real staging spots
+        for (const b of bots) if (!this.orders.has(b.actor.id) && this.roles.get(b.actor.id) !== 'lurk' && this.roles.get(b.actor.id) !== 'flank') set(b, [{ do: 'move', pos: realStage(b), walk: true, tag: 'sneak' }]);
+        this.executeAt = liveAt + longest + this.rng.range(5, 9); // give the defenders time to rotate
+        break;
+      }
+      case 'bombfake': {
+        // most of the team shows at the other site; the bomb goes quietly to the real one
+        const carrier = bots.find(b => b.actor.hasBomb);
+        const support = notCarrier.slice(-1)[0];
+        const show = notCarrier.filter(b => b !== support);
+        if (!carrier || !show.length) { this.planKind = 'execute'; return; }
+        this.fakeSite = other;
+        let longest = 0;
+        show.forEach((b, k) => { const list = noiseAt(other, k, 5, k < 2, 'bombfake'); set(b, list); longest = Math.max(longest, this.travel(g, b.actor.pos, list[0]?.pos ?? b.actor.pos) + 5); });
+        for (const b of [carrier, support]) if (b) set(b, [{ do: 'move', pos: realStage(b), walk: true, tag: 'sneak' }]);
+        this.executeAt = liveAt + longest + this.travel(g, this.lanePoint(g, other, 0.9)!.pos, this.lanePoint(g, real, 0.7)!.pos) * 0.6 + 4;
+        break;
+      }
+      case 'doublefake': {
+        // show at the real site, then at the other one, then come back for real
+        const fakers = byNade(notCarrier).slice(0, Math.min(2, notCarrier.length));
+        if (!fakers.length) { this.planKind = 'execute'; return; }
+        this.fakeSite = other;
+        let longest = 0;
+        fakers.forEach((b, k) => {
+          const first = noiseAt(real, k, 4, true, 'doublefake'), second = noiseAt(other, k, 4, true, 'doublefake');
+          set(b, [...first, ...second]);
+          longest = Math.max(longest, this.travel(g, b.actor.pos, first[0]?.pos ?? b.actor.pos) + 8 + this.travel(g, first[0]?.pos ?? b.actor.pos, second[0]?.pos ?? b.actor.pos));
+        });
+        for (const b of bots) if (!this.orders.has(b.actor.id) && this.roles.get(b.actor.id) !== 'lurk' && this.roles.get(b.actor.id) !== 'flank') set(b, [{ do: 'move', pos: realStage(b), walk: true, tag: 'sneak' }]);
+        this.executeAt = liveAt + longest + this.rng.range(4, 7);
+        break;
+      }
+      case 'fakeback': {
+        // everyone starts the hit, shows guns and a grenade, backs off, waits for the rotation
+        const nadeBy = byNade(notCarrier)[0];
+        let longest = 0;
+        bots.forEach((b, k) => {
+          if (this.roles.get(b.actor.id) === 'lurk' || this.roles.get(b.actor.id) === 'flank') return;
+          const p = this.lanePoint(g, real, 0.88, k);
+          if (!p) return;
+          const back = realStage(b);
+          set(b, [{ do: 'move', pos: p.pos, tag: 'fakeback' }, { do: 'noise', pos: p.pos, look: p.look, dur: 3, nade: b === nadeBy, tag: 'fakeback' }, { do: 'move', pos: back, tag: 'fakeback' }]);
+          longest = Math.max(longest, this.travel(g, b.actor.pos, p.pos) + 3 + this.travel(g, p.pos, back));
+        });
+        this.fakeSite = real;
+        this.executeAt = liveAt + longest + this.rng.range(8, 14);
+        break;
+      }
+      case 'rotbait': {
+        // pressure the other site for real until the defenders come over, then hit the emptied one
+        const n = Math.min(3, Math.max(1, bots.length - 2));
+        const press = notCarrier.slice(0, n);
+        if (!press.length) { this.planKind = 'execute'; return; }
+        this.fakeSite = other;
+        press.forEach((b, k) => {
+          const p = this.lanePoint(g, other, 0.95, k);
+          if (p) set(b, [{ do: 'move', pos: p.pos, tag: 'rotbait' }, { do: 'hold', pos: p.pos, look: p.look, until: 'go', tag: 'rotbait' }]);
+        });
+        this.baitFrom = liveAt + 8;
+        this.executeAt = liveAt + 55; // fallback if no rotation is seen
+        break;
+      }
+      case 'draw': {
+        // spread out and wait; hit the site the defenders move away from
+        bots.forEach((b, k) => {
+          const p = this.lanePoint(g, k % 2 ? other : real, 0.62, k);
+          if (p) set(b, [{ do: 'move', pos: p.pos, tag: 'draw' }, { do: 'hold', pos: p.pos, look: p.look, until: 'go', tag: 'draw' }]);
+        });
+        this.drawAt = liveAt + this.rng.range(30, 45);
+        this.executeAt = this.drawAt + 30;
+        break;
+      }
+    }
+  }
+
+  /** Next scripted step for a bot as a goal (null when it has no orders left). */
+  private orderGoal(g: Game, bot: BotController): Goal | null {
+    const list = this.orders.get(bot.actor.id);
+    const a = bot.actor;
+    while (list && list.length) {
+      const o = list[0];
+      if (o.do === 'move') {
+        if (vdist2d(a.pos, o.pos) < 2.5) { list.shift(); continue; }
+        return { kind: 'move', pos: o.pos, walk: o.walk, reason: o.tag };
+      }
+      if (o.do === 'hold') {
+        if (o.until === 'go' ? this.executing : g.time >= o.until) { list.shift(); continue; }
+        return { kind: 'hold', pos: o.pos, look: o.look, reason: o.tag };
+      }
+      // noise: get there, then make a show for `dur` seconds (one fake grenade at most)
+      if (vdist2d(a.pos, o.pos) > 3 && o.started === undefined) return { kind: 'move', pos: o.pos, reason: o.tag };
+      if (o.started === undefined) {
+        o.started = g.time;
+        const nade = o.nade ? (['decoy', 'flash', 'smoke', 'he', 'molotov'] as const).find(n => a.grenades.includes(n)) : undefined;
+        if (nade && !bot.utility) bot.utility = { grenade: nade, target: { ...o.look, y: o.look.y - 1.4 }, from: { ...a.pos }, plan: null, at: g.time, done: false, reason: 'fake nade' };
+        if (this.rng.chance(0.5)) bot.radio(g, a, `Шумим на ${siteAt(g.map, o.look.x, o.look.z) ?? 'точке'}`);
+      }
+      if (g.time - o.started < o.dur) return o.quiet ? { kind: 'hold', pos: o.pos, look: o.look, reason: o.tag } : { kind: 'noise', pos: o.pos, look: o.look, shots: true, reason: o.tag };
+      list.shift();
+    }
+    return null;
   }
 
   private assignAttack(g: Game): void {
@@ -343,6 +529,39 @@ export class TeamBrain {
     }
     // site defenders change position during the round
     for (const b of bots) this.repositionAt.set(b.actor.id, live + this.rng.range(14, 34));
+    const setup: string[] = [];
+    const anchors = () => bots.filter(b => this.roles.get(b.actor.id) === 'anchor' && !this.orders.has(b.actor.id));
+    const holdPos = (b: BotController) => { const h = this.holds.get(b.actor.id)!; return { pos: g.nav.center(h.cell.i, h.cell.j), look: h.look, site: h.site as string }; };
+    // fake utility: a grenade into an attack lane early, as if we were about to push out
+    const nader = anchors().find(b => b.actor.grenades.some(n => n !== 'flash'));
+    if (nader && this.rng.chance(special * 0.5)) {
+      const hp = holdPos(nader);
+      const lane = this.lanePoint(g, hp.site, 0.75, this.rng.int(0, 2));
+      if (lane) {
+        this.orders.set(nader.actor.id, [{ do: 'hold', pos: hp.pos, look: hp.look, until: live + this.rng.range(3, 10), tag: 'ct-fake-util' },
+          { do: 'noise', pos: hp.pos, look: { ...lane.pos, y: lane.pos.y + 1.4 }, dur: 2, nade: true, quiet: true, tag: 'ct-fake-util' }]);
+        this.note('ct-fake-util'); setup.push('фейковая граната');
+      }
+    }
+    // false noise: one defender storms out loudly as if stacking forward, then goes back
+    const loud = anchors()[0];
+    if (loud && bots.length >= 3 && this.rng.chance(special * 0.45)) {
+      const hp = holdPos(loud);
+      const lane = this.lanePoint(g, hp.site, 0.8, this.rng.int(0, 2));
+      if (lane) {
+        this.orders.set(loud.actor.id, [{ do: 'move', pos: lane.pos, tag: 'ct-noise' }, { do: 'noise', pos: lane.pos, look: { x: lane.pos.x * 2 - hp.pos.x, y: lane.pos.y + 1.4, z: lane.pos.z * 2 - hp.pos.z }, dur: 3, nade: false, tag: 'ct-noise' }, { do: 'move', pos: hp.pos, tag: 'ct-noise' }]);
+        this.note('ct-noise'); setup.push('ложный шум');
+      }
+    }
+    // bait / retake setup: give one site up on purpose and play it from deep, retake later
+    if (this.rng.chance(special * 0.35)) {
+      const site = this.rng.pick(g.map.sites).id;
+      const deep = g.analysis.holds.filter(h => h.site === site).sort((x, y) => g.analysis.distFromT[g.nav.idx(y.cell.i, y.cell.j)] - g.analysis.distFromT[g.nav.idx(x.cell.i, x.cell.j)]);
+      let k = 0;
+      for (const b of bots) if (this.holds.get(b.actor.id)?.site === site && deep[k]) this.holds.set(b.actor.id, deep[k++]);
+      if (k) { this.note('ct-bait'); setup.push(`приманка: отдают ${site}`); }
+    }
+    this.ctSetup = setup.join(', ');
   }
 
   /** A point part-way down an attack lane (frac 0 = T spawn, 1 = site), looking toward the attackers. */
@@ -428,7 +647,25 @@ export class TeamBrain {
       const m = g.mode as BombMode;
       const timeLeft = m.phaseEnd - now;
       const allStaged = staged >= Math.max(1, bots.length - 1);
-      if (now >= this.executeAt || (allStaged && this.planKind !== 'default' && now > this.executeAt - 15) || timeLeft < 35) this.startExecute(g);
+      const scripted = this.orders.size > 0;
+      if (now >= this.executeAt || (allStaged && !scripted && this.planKind !== 'default' && now > this.executeAt - 15) || timeLeft < 35) this.startExecute(g);
+      // rotation bait: defenders showing up at the pressured site = the other one is emptier
+      if (this.planKind === 'rotbait' && this.fakeSite && now > this.baitFrom) {
+        const fs = g.map.sites.find(x => x.id === this.fakeSite)!;
+        const ids = new Set(this.recent(g, 6).filter(x => vdist2d(x.pos, fs.center) < 20).map(x => x.id));
+        if (ids.size >= 2 && this.executeAt > now + 2) { this.executeAt = now + 2; this.members[0]?.radio(g, this.members[0].actor, `Они пошли на ${this.fakeSite} — заходим на ${this.site}!`); }
+      }
+      // draw: wait for the defenders to commit, then hit the site with fewer of them
+      if (this.planKind === 'draw' && this.drawAt && now >= this.drawAt) {
+        this.drawAt = 0;
+        const rs = this.recent(g, 25);
+        const sites = (g.mode.allowedSites ?? g.map.sites.map(x => x.id)) as string[];
+        const count = (id: string) => new Set(rs.filter(x => vdist2d(x.pos, g.map.sites.find(y => y.id === id)!.center) < 20).map(x => x.id)).size;
+        this.site = sites.slice().sort((x, y) => count(x) - count(y))[0] as SiteId;
+        this.assignAttack(g);
+        this.executeAt = now + 3;
+        this.members[0]?.radio(g, this.members[0].actor, `Идём на ${this.site}`);
+      }
       // mid-round call: switch site if we saw a stack at the planned site
       if (this.planKind === 'default' && !this.switchedSite && this.adaptation > 0.5) {
         const near = this.recent(g, 8).filter(s => {
@@ -565,6 +802,8 @@ export class TeamBrain {
       const route = this.routes.get(id);
       const stage = this.stages.get(id);
       if (!route || !stage) return null;
+      const scripted = this.orderGoal(g, bot);
+      if (scripted) return scripted;
       const role = this.roles.get(id);
       const site0 = g.map.sites.find(s => s.id === this.site)!;
       if (role === 'lurk' || role === 'flank') {
@@ -602,6 +841,8 @@ export class TeamBrain {
       return { kind: 'move', pos: target, walk: false, reason: 'execute' };
     }
     // CT
+    const ctScript = this.orderGoal(g, bot);
+    if (ctScript) return ctScript;
     if (this.alertSite && g.time >= this.alertAt && this.coordination > 0.25) {
       const myHold = this.holds.get(id);
       const anchorElsewhere = myHold && myHold.site !== this.alertSite && myHold.site !== 'mid';
@@ -618,6 +859,21 @@ export class TeamBrain {
           if (far && g.bomb.state !== 'planted' && this.rng.chance(p)) {
             const path = this.flankRoute(g, a.pos, this.alertSite);
             if (path) { this.flankPath.set(id, path); this.roles.set(id, 'flank'); this.note('ct-flank'); bot.radio(g, a, `Обхожу их сзади на ${this.alertSite}`); }
+          }
+        }
+        // false rotation: run noisily part of the way toward the fight, then go back home -
+        // attackers waiting for the rotation hit a site that is still held
+        const myHold2 = this.holds.get(id);
+        if (this.roles.get(id) !== 'flank' && myHold2 && myHold2.site !== this.alertSite && myHold2.site !== 'mid' && !this.ctFakeRot && g.bomb.state !== 'planted' && this.rng.chance(this.specialChance() * 0.35)) {
+          this.ctFakeRot = true;
+          const path = g.nav.findPath(a.pos, g.map.sites.find(x => x.id === this.alertSite)!.center);
+          if (path && path.length > 8) {
+            const c = path[Math.floor(path.length * 0.45)];
+            const mid = g.nav.center(c.i, c.j);
+            const home = g.nav.center(myHold2.cell.i, myHold2.cell.j);
+            this.orders.set(id, [{ do: 'move', pos: mid, tag: 'ct-fake-rotate' }, { do: 'noise', pos: mid, look: { ...home, y: home.y + 1.4 }, dur: 2.5, nade: false, tag: 'ct-fake-rotate' }, { do: 'move', pos: home, tag: 'ct-fake-rotate' }]);
+            this.note('ct-fake-rotate');
+            return this.orderGoal(g, bot);
           }
         }
         if (this.roles.get(id) === 'flank') {

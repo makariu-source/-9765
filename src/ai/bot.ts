@@ -25,7 +25,9 @@ export type Goal =
   | { kind: 'defuse'; pos: Vec3 }
   | { kind: 'throw'; task: UtilityTask }
   | { kind: 'retreat'; pos: Vec3 }
-  | { kind: 'pickup'; pos: Vec3 };
+  | { kind: 'pickup'; pos: Vec3 }
+  /** fake: show presence at a spot - run around (footsteps) and fire short bursts */
+  | { kind: 'noise'; pos: Vec3; look: Vec3; shots: boolean; reason: string };
 
 export interface UtilityTask {
   grenade: GrenadeType;
@@ -83,6 +85,10 @@ export class BotController implements Controller {
   saving: HideSpot | null = null;
   private saveRound = -1;
   private nextSaveCheck = 0;
+  /** fake retreat: fall back, then hold the angle a chaser has to come through */
+  private ambush: { pos: Vec3; look: Vec3; until: number } | null = null;
+  private nextAmbushAt = 0;
+  private heardReported = new Map<number, number>();
   /** why the last pickup was chosen (stats / spectator overlay) */
   lastPickupWhy: 'empty' | 'upgrade' | 'situational' | 'ammo' | '' = '';
   pickupPlans = 0;
@@ -120,7 +126,7 @@ export class BotController implements Controller {
   think(g: Game, a: Actor, dt: number): InputCmd {
     const cmd = emptyInput(this.aimYaw, this.aimPitch);
     // perception at 32 Hz, staggered across bots (reaction-time resolution ~31 ms)
-    if ((g.tick + a.id) % 2 === 0) this.perception.update(g);
+    if ((g.tick + a.id) % 2 === 0) { this.perception.update(g); this.reportHeard(g); }
     const canMove = g.mode.canMove(a);
 
     if (g.mode.canBuy(a) && this.boughtRound !== this.roundKey(g) && g.time >= this.buyAt) {
@@ -256,6 +262,27 @@ export class BotController implements Controller {
         }
       }
     }
+    // Fake retreat (both sides): after trading shots, fall back as if giving the spot up,
+    // then wait on a prepared angle for whoever chases
+    if (this.ambush) {
+      if (now < this.ambush.until) { this.goal = { kind: 'hold', pos: this.ambush.pos, look: this.ambush.look, reason: 'fake-retreat' }; return; }
+      this.ambush = null;
+    }
+    if (freshThreat && freshThreat.seen && now - this.lastSeenEnemyAt < 1.5 && now >= this.nextAmbushAt && this.profile.coverSense >= 0.6
+      && vdist(freshThreat.pos, a.pos) < 25 && (a.health < 80 || [...p.memory.values()].filter(x => now - x.time < 3).length >= 2) && !(isT && a.hasBomb) && g.bomb.state !== 'planted') {
+      this.nextAmbushAt = now + 15;
+      if (this.rng.chance(0.3)) {
+        const pos = this.coverFrom(g, a, freshThreat.pos);
+        if (vdist2d(pos, a.pos) > 3) {
+          this.ambush = { pos, look: { x: freshThreat.pos.x, y: freshThreat.pos.y + 1.4, z: freshThreat.pos.z }, until: now + this.rng.range(5, 8) };
+          this.brain?.note(isT ? 't-fake-retreat' : 'ct-fake-retreat');
+          this.radio(g, a, 'Отхожу, жду их на угле');
+          this.goal = { kind: 'hold', pos: this.ambush.pos, look: this.ambush.look, reason: 'fake-retreat' };
+          return;
+        }
+      }
+    }
+
     // Retreat when weak and outnumbered
     if (freshThreat && a.health < 35 && this.profile.coverSense > 0.3 && vdist(freshThreat.pos, a.pos) < 18) {
       const mates = g.actors.filter(m => m.alive && m !== a && !p.isEnemy(g, m)).length;
@@ -539,6 +566,30 @@ export class BotController implements Controller {
         break;
       }
       case 'throw': this.executeThrow(g, a, goal.task, cmd, dt); break;
+      case 'noise': {
+        const arrived = this.navigate(g, a, goal.pos, cmd, 1.5);
+        if (arrived) {
+          // shuffle left/right at full speed (loud footsteps) and show the gun
+          cmd.forward = 0;
+          cmd.right = Math.sin(g.time * 2.2 + a.id) > 0 ? 1 : -1;
+          look(goal.look, 0.6);
+          const w = a.activeWeapon();
+          const mateInFront = g.actors.some(o => o !== a && o.alive && o.team === a.team && vdist(o.pos, a.pos) < 12 && g.isLookingAt(a, o.pos, 20));
+          if (goal.shots && w && w.clip > 6 && !mateInFront && g.tick % 56 < 5) cmd.fire = true;
+        } else look(this.lookAhead(g, a), 0.55);
+        break;
+      }
+    }
+  }
+
+  /** Call out enemies we only heard (footsteps, gunfire): rough positions go to the team. */
+  private reportHeard(g: Game): void {
+    if (!this.brain) return;
+    for (const m of this.perception.memory.values()) {
+      if (m.seen || m.time !== g.time) continue;
+      if (g.time - (this.heardReported.get(m.id) ?? -9) < 1.5) continue;
+      this.heardReported.set(m.id, g.time);
+      this.brain.report(g, m.id, m.pos);
     }
   }
 

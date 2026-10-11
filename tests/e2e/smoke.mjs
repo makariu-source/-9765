@@ -133,6 +133,8 @@ await step('spectator', async () => {
   const picked = await page.evaluate(() => { const s = window.__app.spectator; return { team: s.game.actors[s.followId].team, xray: s.renderer.xray }; });
   if (picked.team !== 'T' || !picked.xray) throw new Error(`player list / x-ray: ${JSON.stringify(picked)}`);
   await shot('64-spec-players');
+  // no emoji-style cross for the fallen (it renders as a purple icon on phones)
+  if (await page.evaluate(() => document.querySelector('.spectator').textContent.includes('\u271D'))) throw new Error('cross glyph in spectator UI');
   await page.keyboard.press('Escape');
   await page.waitForSelector('.nav', { timeout: 10000 });
 });
