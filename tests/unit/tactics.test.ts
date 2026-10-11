@@ -85,7 +85,8 @@ describe('team tactics', () => {
 
   it('novices never use special tactics', () => {
     const t = play(1, 300);
-    expect(Object.keys(t).filter(k => k !== 'ct-reposition')).toEqual([]);
+    // (saving and hunting savers are not role tactics: novices may rarely do them too)
+    expect(Object.keys(t).filter(k => !['ct-reposition', 'save', 'hunt'].includes(k))).toEqual([]);
   }, 120000);
 
   it('defenders do not take the same spot every round', () => {
@@ -106,4 +107,57 @@ describe('team tactics', () => {
     const varied = [...spots.values()].filter(s => s.size >= 2).length;
     expect(varied).toBeGreaterThanOrEqual(3);
   }, 120000);
+});
+
+describe('v1.2.1: saving and hunting savers', () => {
+  const live = (mapId: string, level: number) => {
+    const m = createMatch({ mode: 'competitive', mapId, seed: 6, lobby: bots(5, level), short: true });
+    const g = m.game;
+    for (let i = 0; i < 30 / TICK && g.mode.hud().phase !== 'live'; i++) g.step();
+    for (let i = 0; i < 3 / TICK; i++) g.step();
+    return { m, g };
+  };
+  const kill = (a: { alive: boolean; health: number }) => { a.alive = false; a.health = 0; };
+
+  it('a lone defender with an AWP against five attackers hides instead of fighting', () => {
+    const { m, g } = live('sandstorm', 7);
+    const cts = g.actors.filter(a => a.team === 'CT');
+    cts.slice(1).forEach(kill);
+    const last = cts[0];
+    last.primary = newWeapon('awm'); last.armor = 100; last.helmet = true;
+    const bot = m.director.bots.find(b => b.actor === last)!;
+    for (let i = 0; i < 20 / TICK && !bot.saving; i++) g.step();
+    expect(bot.saving).not.toBeNull();
+    expect((bot.goal as { reason?: string }).reason).toBe('save');
+  }, 60000);
+
+  it('no save with a cheap loadout (pistol only)', () => {
+    const { m, g } = live('sandstorm', 7);
+    const cts = g.actors.filter(a => a.team === 'CT');
+    cts.slice(1).forEach(kill);
+    cts[0].primary = null; cts[0].armor = 0; cts[0].helmet = false;
+    const bot = m.director.bots.find(b => b.actor === cts[0])!;
+    for (let i = 0; i < 15 / TICK; i++) g.step();
+    expect(bot.saving).toBeNull();
+  }, 60000);
+
+  it('defenders send hunters when the last attacker goes quiet', () => {
+    const { m, g } = live('villa', 7);
+    g.actors.filter(a => a.team === 'T').slice(1).forEach(kill);
+    const brain = m.director.brains.find(b => b.team === 'CT')! as unknown as { hunters: Map<number, unknown>; sightings: unknown[] };
+    let hunted = false;
+    for (let i = 0; i < 40 / TICK && !hunted; i++) { brain.sightings = []; g.step(); hunted = brain.hunters.size > 0; }
+    expect(hunted).toBe(true);
+  }, 60000);
+});
+
+describe('v1.2.1: Reactor B ramp', () => {
+  it('no path from the ramp room drops onto the low-roofed ramp edge', async () => {
+    const { NavGrid } = await import('../../src/sim/nav');
+    const { getMap } = await import('../../src/sim/maps/maps');
+    const nav = new NavGrid(getMap('reactor'));
+    for (const i of [30, 31, 32]) expect(nav.canStep(i, 27, i, 28), `${i},27 -> ${i},28`).toBe(false);
+    expect(nav.canStep(33, 27, 33, 28)).toBe(true);
+    expect(nav.findPath({ x: 64, z: 50 }, { x: 40, z: 64 })).not.toBeNull(); // ramp room -> B still connected
+  });
 });

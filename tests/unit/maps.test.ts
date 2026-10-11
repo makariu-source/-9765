@@ -43,10 +43,13 @@ describe('maps', () => {
         for (let j = 0; j < m.h; j++) for (let i = 0; i < m.w; i++) for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
           if (!nav.canStep(i, j, i + di, j + dj)) continue;
           const y = Math.max(nav.height[nav.idx(i, j)], nav.height[nav.idx(i + di, j + dj)]) + 0.01;
-          // standing body just across the cell border, still at the higher floor's height
-          const x = (i + 0.5 + di * 0.5) * CELL + di * (HALF_W + 0.05), z = (j + 0.5 + dj * 0.5) * CELL + dj * (HALF_W + 0.05);
-          const hit = world.overlaps(x, y, z, HALF_W, STAND_H);
-          if (hit?.kind === 'roof') blocked.push(`${i},${j}->${i + di},${j + dj}`);
+          // standing body just across the cell border, still at the higher floor's height; also
+          // shifted sideways (smoothed paths do not run through cell centres) - v1.2.1
+          for (const side of [-0.6, 0, 0.6]) {
+            const x = (i + 0.5 + di * 0.5) * CELL + di * (HALF_W + 0.05) + dj * side, z = (j + 0.5 + dj * 0.5) * CELL + dj * (HALF_W + 0.05) + di * side;
+            const hit = world.overlaps(x, y, z, HALF_W, STAND_H);
+            if (hit?.kind === 'roof') { blocked.push(`${i},${j}->${i + di},${j + dj}`); break; }
+          }
         }
         expect(blocked, `nav edges blocked by a roof on ${def.id}`).toEqual([]);
       });

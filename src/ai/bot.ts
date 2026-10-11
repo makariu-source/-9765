@@ -12,6 +12,7 @@ import { emptyInput, type InputCmd } from '../sim/types';
 import type { GrenadeType } from '../sim/weapons';
 import { profileFor, type BotProfile } from './difficulty';
 import { choosePickup, claimDrop, sightline } from './loadout';
+import { loadoutValue, pickHideSpot, type HideSpot } from './save';
 import { Perception, type Memory } from './perception';
 import type { TeamBrain } from './team';
 import { planThrow, type ThrowPlan } from './throws';
@@ -78,6 +79,10 @@ export class BotController implements Controller {
   /** weapon-pickup errand the bot has committed to */
   private pickupTask: { dropId: number; until: number } | null = null;
   private nextPickupCheck = 0;
+  /** saving the loadout this round: where we hide (decided at most once per round) */
+  saving: HideSpot | null = null;
+  private saveRound = -1;
+  private nextSaveCheck = 0;
   /** why the last pickup was chosen (stats / spectator overlay) */
   lastPickupWhy: 'empty' | 'upgrade' | 'situational' | 'ammo' | '' = '';
   pickupPlans = 0;
@@ -173,6 +178,10 @@ export class BotController implements Controller {
       this.goal = { kind: 'throw', task: this.utility };
       return;
     }
+
+    // Hopeless round with an expensive loadout: hide and keep it for the next round
+    const save = this.saveGoal(g, a);
+    if (save) { this.goal = save; return; }
 
     if (g.mode.allowBomb) {
       // Avoid the blast
@@ -315,6 +324,47 @@ export class BotController implements Controller {
     }
     // No brain (DM / arms race / TDM): roam between hotspots
     this.goal = this.roam(g, a);
+  }
+
+  /**
+   * Save: when the round is lost anyway (alone against many, no time to plant or defuse,
+   * both sites known to be held) a bot with a valuable loadout may stop playing the
+   * objective and hide instead. Only public info (alive counts, timers) and own/team intel.
+   */
+  private saveGoal(g: Game, a: Actor): Goal | null {
+    if (!g.mode.allowBomb || g.mode.ffa) return null;
+    const now = g.time;
+    const rk = this.roundKey(g);
+    if (rk !== this.saveRound) { this.saveRound = rk; this.saving = null; this.nextSaveCheck = 0; }
+    if (this.saving) return { kind: 'hold', pos: this.saving.pos, look: this.saving.look, reason: 'save' };
+    if (now < this.nextSaveCheck) return null;
+    this.nextSaveCheck = now + 3;
+    const isT = a.team === 'T';
+    if (isT && g.bomb.state === 'planted') return null; // the bomb plays for us now
+    const mates = g.actors.filter(o => o !== a && o.alive && o.team === a.team).length;
+    const enemies = g.actors.filter(o => o.alive && o.team !== a.team).length;
+    if (!enemies || loadoutValue(a) < 2000) return null;
+    const m = g.mode as { phaseEnd?: number };
+    const left = (m.phaseEnd ?? now + 99) - now;
+    let hopeless = (mates === 0 && enemies >= 3) || (mates + 1) * 3 <= enemies;
+    if (isT) {
+      if (mates === 0 && enemies >= 2 && left < 22) hopeless = true; // no time to get a plant down
+      if (mates <= 1 && enemies >= 2 && left < 45 && this.brain?.sitesHeld(g)) hopeless = true; // both sites held
+    } else if (g.bomb.state === 'planted') {
+      const tl = g.bomb.explodeAt - now;
+      if (tl < (a.kit ? 5 : 10) + vdist(a.pos, g.bomb.pos) / 5 + 1) hopeless = true; // cannot make the defuse
+      else if (!hopeless) return null;
+    }
+    if (!hopeless) return null;
+    // better players save more often (novices rarely think about the next round)
+    if (!this.rng.chance(0.15 + this.profile.adaptation * 0.65)) return null;
+    const threats = [...this.perception.memory.values()].filter(x => now - x.time < 10).map(x => x.pos);
+    const spot = pickHideSpot(g, a, threats, g.bomb.state === 'planted' ? g.bomb.pos : null);
+    if (!spot) return null;
+    this.saving = spot;
+    this.brain?.note('save');
+    this.radio(g, a, 'Сохраняю оружие, прячусь');
+    return { kind: 'hold', pos: spot.pos, look: spot.look, reason: 'save' };
   }
 
   private pickupGoal(g: Game, a: Actor, threat: Memory | null): Goal | null {
@@ -777,6 +827,11 @@ export class BotController implements Controller {
       const cells = g.nav.findPath(a.pos, goal, penalty);
       this.path = cells ? g.nav.smooth(cells, a.pos) : [];
       if (this.path.length) this.path[this.path.length - 1] = { ...goal };
+      // stuck on a corner: first step back to the middle of our cell, then follow the path
+      if (this.stuckCount > 0 && cells?.length) {
+        const c = g.nav.center(cells[0].i, cells[0].j);
+        if (vdist2d(c, a.pos) > 0.3) this.path.unshift(c);
+      }
       this.pathGoal = { ...goal };
       this.pathTime = now;
       this.lastProgressTime = now;
@@ -797,8 +852,31 @@ export class BotController implements Controller {
     }
     while (this.path.length && vdist2d(a.pos, this.path[0]) < 0.55) this.path.shift();
     if (!this.path.length) return vdist2d(a.pos, goal) < tol + 0.8;
-    this.navigateDirect(a, this.path[0], cmd);
+    this.navigateDirect(a, this.avoidTeammates(g, a, this.path[0]), cmd);
     return false;
+  }
+
+  /**
+   * Teammate right in our way (narrow corridors, several bots rotating at once): step around
+   * him on the right. Everyone keeping right resolves head-on jams instead of shoving forever.
+   */
+  private avoidTeammates(g: Game, a: Actor, p: Vec3): Vec3 {
+    const dx = p.x - a.pos.x, dz = p.z - a.pos.z;
+    const l = Math.hypot(dx, dz);
+    if (l < 0.3) return p;
+    const wx = dx / l, wz = dz / l;
+    for (const o of g.actors) {
+      if (o === a || !o.alive || o.team !== a.team || Math.abs(o.pos.y - a.pos.y) > 1.2) continue;
+      const ox = o.pos.x - a.pos.x, oz = o.pos.z - a.pos.z;
+      const d = Math.hypot(ox, oz);
+      if (d > 1.5 || d < 1e-3) continue;
+      if ((ox * wx + oz * wz) / d < 0.6) continue; // not in front of us
+      if (o.vel.x * wx + o.vel.z * wz > 2.5) continue; // he is walking away ahead of us: just follow
+      const rx = -wz, rz = wx; // our right-hand side
+      const nx = wx * 0.45 + rx * 0.9, nz = wz * 0.45 + rz * 0.9;
+      return { x: a.pos.x + nx * 2, y: p.y, z: a.pos.z + nz * 2 };
+    }
+    return p;
   }
 
   private smokePenalty(g: Game): Float32Array | undefined {

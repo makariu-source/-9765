@@ -96,7 +96,17 @@ export class NavGrid {
     if (dh > NAV_STEP_UP || -dh > NAV_DROP) return false;
     // headroom: a standing body coming off the higher floor must fit under both roofs
     // (e.g. dropping from a raised room onto a ramp whose low roof blocks the way)
-    if (Math.max(ha, hb) + NAV_HEADROOM > Math.min(this.ceil[aj * this.w + ai], this.ceil[bj * this.w + bi])) return false;
+    const top = Math.max(ha, hb) + NAV_HEADROOM;
+    if (top > Math.min(this.ceil[aj * this.w + ai], this.ceil[bj * this.w + bi])) return false;
+    if (ai === bi || aj === bj) {
+      // a body is ~0.7 m wide and smoothed paths hug cell borders: it must also clear the
+      // roofs of the cells beside the step (e.g. Reactor's ramp-room edge above the B ramp)
+      const li = aj - bj, lj = bi - ai; // perpendicular to the move
+      for (const [ci, cj] of [[ai, aj], [bi, bj]]) for (const s of [1, -1]) {
+        const ni = ci + li * s, nj = cj + lj * s;
+        if (this.isWalk(ni, nj) && top > this.ceil[nj * this.w + ni]) return false;
+      }
+    }
     if (ai !== bi && aj !== bj) {
       // diagonals: both orthogonal neighbours must be passable too
       if (!this.canStep(ai, aj, bi, aj) || !this.canStep(ai, aj, ai, bj)) return false;
@@ -227,7 +237,8 @@ export class NavGrid {
     while (idx < pts.length - 1) {
       let far = idx + 1;
       for (let k = pts.length - 1; k > idx + 1; k--) {
-        if (this.directWalkable(cur, pts[k])) { far = k; break; }
+        // generous clearance: bots overshoot a little on turns and must not catch wall corners
+        if (this.directWalkable(cur, pts[k], 0.6)) { far = k; break; }
       }
       out.push(pts[far]);
       cur = pts[far];

@@ -34,6 +34,7 @@ const GOAL_NAMES: Record<string, string> = {
   retake: 'отбивает точку', 'retake-group': 'собирается на ретейк', 'retake-clear': 'прикрывает разминирование',
   'post-plant': 'держит бомбу', flank: 'обходит в тыл', lurk: 'крадётся', 'flank-wait': 'ждёт обхода', push: 'вышел вперёд',
   roam: 'разведка', 'search bomb': 'ищет бомбу', roam_dm: 'бродит',
+  save: 'сейвит оружие (прячется)', 'hunt-save': 'ищет сейверов',
 };
 
 export class SpectatorSession {

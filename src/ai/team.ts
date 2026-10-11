@@ -12,6 +12,7 @@ import { Rng } from '../sim/rng';
 import type { GameEvent } from '../sim/types';
 import type { Team } from '../sim/weapons';
 import { BotController, type Goal, type UtilityTask } from './bot';
+import { hidingSpots } from './save';
 
 /**
  * entry/support/awp: the main attack · lurk: waits in the other lane, then sneaks behind
@@ -64,6 +65,12 @@ export class TeamBrain {
   private tacticUntil = new Map<number, number>();
   private repositionAt = new Map<number, number>();
   private flankDecided = new Set<number>();
+  /** attackers that reached the site this round, and which defender spot they clear next */
+  private reachedSite = new Set<number>();
+  /** bots sent to hunt enemies who hide to save their guns, and the spots they check */
+  private hunters = new Map<number, { spots: Vec3[]; k: number }>();
+  private nextHuntCheck = 0;
+  private clearIdx = new Map<number, number>();
   /** how often each tactic was used (analysis, spectator overlay) */
   tactics: Record<string, number> = {};
   rng: Rng;
@@ -102,6 +109,8 @@ export class TeamBrain {
     this.switchedSite = false;
     this.flankPath.clear(); this.spots.clear(); this.spotIdx.clear(); this.tacticUntil.clear();
     this.repositionAt.clear(); this.flankDecided.clear();
+    this.reachedSite.clear(); this.clearIdx.clear();
+    this.hunters.clear(); this.nextHuntCheck = 0;
     const m = g.mode as BombMode;
     this.pistolRound = m.round === 1 || m.round === m.regulationHalf + 1;
     this.decideEconomy(g);
@@ -284,7 +293,7 @@ export class TeamBrain {
   /** Chance of special tactics this round: none for novices, often for top bots. */
   private specialChance(): number { return clamp((this.coordination - 0.35) * 1.3, 0, 0.8); }
 
-  private note(k: string): void { this.tactics[k] = (this.tactics[k] ?? 0) + 1; }
+  note(k: string): void { this.tactics[k] = (this.tactics[k] ?? 0) + 1; }
 
   /** Weighted-random hold: strong spots preferred, last round's spot avoided. */
   private pickHold(options: HoldSpot[], id: number): HoldSpot | undefined {
@@ -505,11 +514,53 @@ export class TeamBrain {
     if (lead && this.planKind !== 'chaos') lead.radio(g, lead.actor, this.planKind === 'rush' ? `Раш ${this.site}!` : `Заходим на ${this.site}!`);
   }
 
+  /** Defenders seen at both sites recently (team intel only). */
+  sitesHeld(g: Game): boolean {
+    const rs = this.recent(g, 20);
+    return g.map.sites.length > 1 && g.map.sites.every(s => rs.some(x => vdist2d(x.pos, s.center) < 16));
+  }
+
+  /**
+   * The other side is down to one or two players and has gone quiet: they are probably
+   * hiding to save their weapons. Send one or two of ours to search the usual hiding corners
+   * (and where they were last seen) to deny the save.
+   */
+  private huntGoal(g: Game, bot: BotController): Goal | null {
+    const a = bot.actor, now = g.time;
+    if (now >= this.nextHuntCheck && this.hunters.size === 0) {
+      this.nextHuntCheck = now + 3;
+      const ours = this.members.filter(b => b.actor.alive);
+      const theirs = g.actors.filter(o => o.alive && o.team !== this.team).length;
+      const m = g.mode as BombMode;
+      const left = (this.team === 'T' && g.bomb.state === 'planted' ? g.bomb.explodeAt : m.phaseEnd ?? now) - now;
+      const quiet = this.recent(g, 8).length === 0;
+      const sideOk = this.team === 'CT' ? g.bomb.state !== 'planted' : g.bomb.state === 'planted' && ours.length >= 3;
+      if (theirs > 0 && theirs <= 2 && ours.length >= theirs + 2 && quiet && left > 15 && sideOk && this.rng.chance(0.25 + this.coordination * 0.55)) {
+        const last = this.sightings.filter(s => now - s.time < 30).map(s => s.pos);
+        const pool = ours.filter(b => !b.actor.hasBomb && b.actor.defusing === 0 && !b.saving);
+        const n = Math.min(2, Math.max(1, ours.length - 2), pool.length);
+        for (const h of pool.sort(() => this.rng.next() - 0.5).slice(0, n)) {
+          const spots = [...last.slice(-2), ...hidingSpots(g).map(s => s.pos)]
+            .sort((x, y) => vdist2d(h.actor.pos, x) - vdist2d(h.actor.pos, y));
+          this.hunters.set(h.actor.id, { spots, k: 0 });
+        }
+        if (this.hunters.size) { this.note('hunt'); ours[0].radio(g, ours[0].actor, 'Они прячутся — ищу их'); }
+      }
+    }
+    const hs = this.hunters.get(a.id);
+    if (!hs || !hs.spots.length) return null;
+    let p = hs.spots[hs.k % hs.spots.length];
+    if (vdist2d(a.pos, p) < 2.5) { hs.k++; p = hs.spots[hs.k % hs.spots.length]; }
+    return { kind: 'move', pos: p, reason: 'hunt-save' };
+  }
+
   /** Main objective goal for a bot when nothing more urgent is happening. */
   objectiveFor(g: Game, bot: BotController): Goal | null {
     const a = bot.actor;
     const id = a.id;
     if (!g.mode.allowBomb) return null;
+    const hunt = this.huntGoal(g, bot);
+    if (hunt) return hunt;
     if (this.team === 'T') {
       const route = this.routes.get(id);
       const stage = this.stages.get(id);
@@ -534,11 +585,18 @@ export class TeamBrain {
         const look = g.nav.center(route.entry.i, route.entry.j);
         return { kind: 'hold', pos: stage, look: { x: look.x, y: look.y + 1.5, z: look.z }, reason: 'stage' };
       }
-      // inside the site: clear toward defender spots
-      if (siteAt(g.map, a.pos.x, a.pos.z) === site.id) {
+      // on the site: clear the defender spots one after another. Once reached, keep clearing
+      // even when a spot lies just outside the site (no in/out ping-pong between goals).
+      if (siteAt(g.map, a.pos.x, a.pos.z) === site.id) this.reachedSite.add(id);
+      if (this.reachedSite.has(id) && vdist2d(a.pos, site.center) < 24) {
         const holds = g.analysis.holds.filter(h => h.site === site.id);
-        const h = holds[id % Math.max(1, holds.length)];
-        if (h) return { kind: 'move', pos: g.nav.center(h.cell.i, h.cell.j), look: h.look, reason: 'clear' };
+        if (holds.length) {
+          let k = this.clearIdx.get(id) ?? id % holds.length;
+          if (vdist2d(a.pos, g.nav.center(holds[k % holds.length].cell.i, holds[k % holds.length].cell.j)) < 2) { k++; this.clearIdx.set(id, k); }
+          this.clearIdx.set(id, k);
+          const h = holds[k % holds.length];
+          return { kind: 'move', pos: g.nav.center(h.cell.i, h.cell.j), look: h.look, reason: 'clear' };
+        }
       }
       const target = a.hasBomb ? (this.plantSpot(g, site.id) ?? site.center) : this.siteClearPoint(g, site.id, id);
       return { kind: 'move', pos: target, walk: false, reason: 'execute' };
