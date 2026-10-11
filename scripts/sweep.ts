@@ -11,6 +11,11 @@ for (const d of MAP_DEFS) for (const seed of seeds) {
   for (let i = 0; i < 10; i++) lobby.push({ name: `Bot${i}`, squad: i < 5 ? 0 : 1, isBot: true, level: lv, skill: 1000, model: i % 4 });
   const m = createMatch({ mode: 'competitive', mapId: d.id, seed: seed * 7919 + lv * 131, lobby, short: true });
   const g = m.game; const mode = g.mode as BombMode;
+  // optional ablations for experiments: ABLATE=nopickup,holds4,notactics
+  const ab = process.env.ABLATE ?? '';
+  if (ab.includes('nopickup')) for (const b of m.director.bots) (b as unknown as { pickupGoal: () => null }).pickupGoal = () => null;
+  if (ab.includes('holds4')) g.analysis.holds = ['A', 'B'].flatMap(s => g.analysis.holds.filter(h => h.site === s).slice(0, 4));
+  if (ab.includes('notactics')) for (const b of m.director.brains) (b as unknown as { specialChance: () => number }).specialChance = () => 0;
   const brains = m.director.brains;
   let planted = false, firstKill: string | null = null, kT = 0, kCT = 0, site = '', behind = 0;
   let pickups: { why: string; from?: string; to: string }[] = [];
@@ -18,7 +23,9 @@ for (const d of MAP_DEFS) for (const seed of seeds) {
   let before: Record<string, number> = {};
   const snapshot = () => { const t: Record<string, number> = {}; for (const b of brains) for (const [k, v] of Object.entries(b.tactics)) t[`${k}`] = (t[k] ?? 0) + v; return t; };
   g.listeners.push((e: any) => {
-    if (e.type === 'round_start') { planted = false; firstKill = null; kT = 0; kCT = 0; site = ''; behind = 0; pickups = []; roleKills = {}; before = snapshot(); }
+    // (tactics are planned inside round_start by the bot director, so the tactic counter is
+    // diffed from one round_end to the next)
+    if (e.type === 'round_start') { planted = false; firstKill = null; kT = 0; kCT = 0; site = ''; behind = 0; pickups = []; roleKills = {}; }
     if (e.type === 'planted') { planted = true; site = e.site ?? ''; }
     if (e.type === 'pickup') { const b = m.director.bots.find(x => x.actor.id === e.actor); pickups.push({ why: b?.lastPickupWhy || 'other', from: e.from, to: e.weapon }); }
     if (e.type === 'kill') {
@@ -33,6 +40,7 @@ for (const d of MAP_DEFS) for (const seed of seeds) {
     if (e.type === 'round_end') {
       const now = snapshot(); const tac: Record<string, number> = {};
       for (const [k, v] of Object.entries(now)) if (v - (before[k] ?? 0) > 0) tac[k] = v - (before[k] ?? 0);
+      before = now;
       console.log(JSON.stringify({ map: d.id, lv, seed, round: mode.round, winner: e.winner, reason: e.reason, planted, site, firstKill, kT, kCT, t: Math.round(g.time - mode.liveStart), behind, pickups, tac, roleKills }));
     }
   });
