@@ -30,7 +30,7 @@ for (const d of MAP_DEFS) for (const seed of seeds) {
     for (const b of m.director.bots) {
       const a = b.actor;
       if (!a.alive) { hist.delete(a.id); continue; }
-      if (!Number.isFinite(a.pos.x + a.pos.y + a.pos.z) || a.pos.y < -2 || !g.nav.isWalk(Math.floor(a.pos.x / 2), Math.floor(a.pos.z / 2)) && a.grounded) broken++;
+      if (!Number.isFinite(a.pos.x + a.pos.y + a.pos.z) || a.pos.y < -2 || a.pos.x < 0 || a.pos.z < 0 || a.pos.x > g.world.sizeX || a.pos.z > g.world.sizeZ) broken++;
       const gl = b.goal as { kind: string; pos?: { x: number; z: number }; reason?: string };
       const far = gl.pos && Math.hypot(gl.pos.x - a.pos.x, gl.pos.z - a.pos.z) > 2.5;
       const busy = g.time - a.lastShot < 2 || (b as unknown as { targetId: number }).targetId >= 0 || a.planting > 0 || a.defusing > 0 || !g.mode.canMove(a);

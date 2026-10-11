@@ -356,8 +356,10 @@ export class BotController implements Controller {
       else if (!hopeless) return null;
     }
     if (!hopeless) return null;
-    // better players save more often (novices rarely think about the next round)
-    if (!this.rng.chance(0.15 + this.profile.adaptation * 0.65)) return null;
+    // decided once per round: better players save more often (novices rarely think about
+    // the next round); a bot that chose to play it out does not change its mind
+    this.nextSaveCheck = Infinity;
+    if (!this.rng.chance(0.1 + this.profile.adaptation * 0.6)) return null;
     const threats = [...this.perception.memory.values()].filter(x => now - x.time < 10).map(x => x.pos);
     const spot = pickHideSpot(g, a, threats, g.bomb.state === 'planted' ? g.bomb.pos : null);
     if (!spot) return null;
