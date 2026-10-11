@@ -5,6 +5,7 @@ import { profileFor } from '../../src/ai/difficulty';
 import { newWeapon } from '../../src/sim/actor';
 import type { LobbyPlayer } from '../../src/sim/modes/lobby';
 import { TICK } from '../../src/sim/game';
+import { emptyInput } from '../../src/sim/types';
 
 const bots = (n: number, level: number): LobbyPlayer[] =>
   Array.from({ length: n * 2 }, (_, i) => ({ name: `B${i}`, squad: i < n ? 0 : 1, isBot: true, level, skill: 1000, model: i % 4 }));
@@ -232,4 +233,38 @@ describe('v3.0: fakes, baits and calls by sound', () => {
     const tPlans = [...seen].filter(k => ['t-fake', 't-fakeback', 't-bombfake', 't-doublefake', 't-noise', 't-rotbait', 't-draw'].includes(k));
     expect(tPlans.length).toBeGreaterThanOrEqual(3);
   }, 300000);
+});
+
+describe('v3.0: silent knife', () => {
+  const setup = () => {
+    const m = createMatch({ mode: 'competitive', mapId: 'sandstorm', seed: 2, lobby: bots(1, 7), short: true });
+    const g = m.game;
+    for (let i = 0; i < 30 / TICK && g.mode.hud().phase !== 'live'; i++) g.step();
+    const t = g.actors.find(a => a.team === 'T')!, ct = g.actors.find(a => a.team === 'CT')!;
+    // an open spot: the CT stands still and looks north; the T is 7 m south of him
+    ct.pos = { x: 46, y: 0, z: 40 }; ct.yaw = 0; ct.vel = { x: 0, y: 0, z: 0 };
+    t.pos = { x: 46, y: 0, z: 47 }; t.yaw = 0;
+    return { m, g, t, ct };
+  };
+
+  it('sneaks up on a standing enemy who looks away and stabs him in the back', () => {
+    let kills = 0;
+    for (let tries = 0; tries < 6 && !kills; tries++) {
+      const { g, t, ct } = setup();
+      g.controllers.set(ct.id, { think: () => ({ ...emptyInput(0, 0) }) }); // stands, back turned
+      g.listeners.push(e => { if (e.type === 'kill' && e.killer === t.id && e.victim === ct.id && (e.weapon === 'knife' || e.weapon === 'goldknife')) kills++; });
+      for (let i = 0; i < 12 / TICK && ct.alive; i++) g.step();
+    }
+    expect(kills).toBeGreaterThan(0);
+  }, 120000);
+
+  it('does not try it when the enemy faces us', () => {
+    const { m, g, t, ct } = setup();
+    ct.yaw = Math.PI; // looking at the T
+    g.controllers.set(ct.id, { think: () => ({ ...emptyInput(Math.PI, 0) }) });
+    const bot = m.director.bots.find(b => b.actor === t)! as unknown as { knife: unknown };
+    let knifeOut = false;
+    for (let i = 0; i < 3 / TICK; i++) { g.step(); knifeOut ||= !!bot.knife; }
+    expect(knifeOut).toBe(false);
+  }, 60000);
 });

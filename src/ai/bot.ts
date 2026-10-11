@@ -92,6 +92,9 @@ export class BotController implements Controller {
   private ambush: { pos: Vec3; look: Vec3; until: number } | null = null;
   private nextAmbushAt = 0;
   private heardReported = new Map<number, number>();
+  /** silent knife: sneaking up behind an unaware, standing enemy */
+  knife: { id: number } | null = null;
+  private knifeDecided = new Map<number, number>();
   /** why the last pickup was chosen (stats / spectator overlay) */
   lastPickupWhy: 'empty' | 'upgrade' | 'situational' | 'ammo' | '' = '';
   pickupPlans = 0;
@@ -155,8 +158,9 @@ export class BotController implements Controller {
     const target = this.pickTarget(g, a, acquired);
     if (target) {
       this.lastSeenEnemyAt = g.time;
-      this.combat(g, a, target, cmd, dt);
+      if (!this.knifeSneak(g, a, target, cmd, dt)) this.combat(g, a, target, cmd, dt);
     } else {
+      this.knife = null;
       this.targetId = -1;
       this.executeGoal(g, a, cmd, dt);
     }
@@ -680,6 +684,45 @@ export class BotController implements Controller {
       this.radio(g, a, where ? `Враг: ${where}` : 'Вижу врага!');
     }
     this.brain?.report(g, t.id, t.pos);
+  }
+
+  /**
+   * Silent knife kill: the enemy stands still with his back to us, is not shooting, and we
+   * know of no other enemy around - walk up quietly with the knife and stab him in the back.
+   * Any sign of danger (he turns, moves, shoots, someone else shows up) and we go back to guns.
+   */
+  private knifeSneak(g: Game, a: Actor, t: Actor, cmd: InputCmd, dt: number): boolean {
+    if (!g.mode.allowBomb && g.mode.id !== 'tdm' && g.mode.id !== 'deathmatch') return false;
+    const now = g.time;
+    const dx = a.pos.x - t.pos.x, dz = a.pos.z - t.pos.z;
+    const dist = Math.hypot(dx, dz);
+    const facing = (-Math.sin(t.yaw) * dx + -Math.cos(t.yaw) * dz) / (dist || 1); // > 0: he looks at us
+    const others = [...this.perception.memory.values()].some(m => m.id !== t.id && now - m.time < 4 && vdist(m.pos, a.pos) < 25);
+    // start only from behind; keep going while he still looks away (we may circle round his side)
+    const safe = facing < (this.knife ? 0.15 : -0.35) && Math.hypot(t.vel.x, t.vel.z) < 0.6 && now - t.lastShot > 1.5 && !others
+      && Math.abs(t.pos.y - a.pos.y) < 1 && a.flashEnd < now && a.planting === 0 && a.defusing === 0;
+    if (this.knife && this.knife.id !== t.id) this.knife = null;
+    if (!this.knife) {
+      if (!safe || dist > 14 || this.profile.anticipation < 0.3) return false;
+      // decide once per target and moment (no flip-flopping every frame)
+      const last = this.knifeDecided.get(t.id) ?? -99;
+      if (now - last < 6) return false;
+      this.knifeDecided.set(t.id, now);
+      if (!this.rng.chance(0.3 + this.profile.anticipation * 0.5)) return false;
+      this.knife = { id: t.id };
+      this.brain?.note(a.team === 'T' ? 't-knife-sneak' : 'ct-knife-sneak');
+    } else if (!safe || dist > 18) { this.knife = null; return false; }
+    // sneak: knife out, walk (silent) to a spot right behind him, look at his back
+    if (a.active !== 'melee') cmd.select = 'melee';
+    const behind = { x: t.pos.x + Math.sin(t.yaw) * 0.9, y: t.pos.y, z: t.pos.z + Math.cos(t.yaw) * 0.9 };
+    cmd.walk = true;
+    if (dist > 1.1 || facing > -0.4) this.navigate(g, a, behind, cmd, 0.25);
+    cmd.walk = true;
+    const ang = anglesFromDir({ x: t.pos.x - a.pos.x, y: t.pos.y + 1.1 - (a.pos.y + a.eyeHeight), z: t.pos.z - a.pos.z });
+    this.turnToward(a, ang.yaw, ang.pitch, dt, 1);
+    // stab only from right behind him: a heavy backstab kills outright
+    if (dist < 1.6 && facing < -0.4 && a.active === 'melee' && Math.abs(wrapAngle(ang.yaw - this.aimYaw)) < 0.25) cmd.fire2 = true;
+    return true;
   }
 
   private combat(g: Game, a: Actor, t: Actor, cmd: InputCmd, dt: number): void {

@@ -441,7 +441,8 @@ export class SpectatorSession {
     const role = bot.brain?.roleOf(a.id);
     const gl = bot.goal as { kind: string; reason?: string };
     let what = gl.reason ? GOAL_NAMES[gl.reason] ?? (gl.reason.startsWith('hold') ? 'держит угол' : '') : '';
-    if (gl.kind === 'pickup') what = 'подбирает оружие';
+    if (bot.knife) what = 'подкрадывается с ножом';
+    else if (gl.kind === 'pickup') what = 'подбирает оружие';
     else if (gl.kind === 'plant') what = 'ставит бомбу';
     else if (gl.kind === 'defuse') what = 'разминирует';
     else if (gl.kind === 'throw') what = 'бросает гранату';
